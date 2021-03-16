@@ -12,9 +12,33 @@ Installation
 pip install aiohttp-s3-client
 ```
 
-Example
+Usage
 -------
 
 ```python
-# aiohttp-s3-client example here
+from http import HTTPStatus
+
+from aiohttp import ClientSession
+from aiohttp_s3_client import S3Client
+
+
+async with ClientSession(raise_for_status=True) as session:
+    client = S3Client(
+        url="http://s3-url",
+        session=session,
+        access_key_id="key-id",
+        secret_access_key="hackme"
+    )
+
+    # Upload str object to bucket "bucket" and key "str"
+    resp = await client.put("/bucket/str", "hello, world")
+    assert resp.status == HTTPStatus.OK
+
+    # Upload bytes object to bucket "bucket" and key "bytes"
+    resp = await client.put("/bucket/bytes", b"hello, world")
+    assert resp.status == HTTPStatus.OK
+
+    # Upload bytes object to bucket "bucket" and key "bytes"
+    resp = await client.put_file("/path_to_file", "/bucket/file")
+    assert resp.status == HTTPStatus.OK
 ```
