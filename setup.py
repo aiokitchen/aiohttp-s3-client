@@ -1,7 +1,7 @@
 import os
-from setuptools import setup, find_packages
 from importlib.machinery import SourceFileLoader
 
+from setuptools import find_packages, setup
 
 module = SourceFileLoader(
     "version", os.path.join("aiohttp_s3_client", "version.py")
