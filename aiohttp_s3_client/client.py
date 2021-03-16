@@ -1,16 +1,17 @@
 import asyncio
 import os
+import typing as t
+from collections import AsyncIterable
 from concurrent.futures.thread import ThreadPoolExecutor
 from mimetypes import guess_type
 from pathlib import Path
-from typing import Optional, Union
 
 from aiohttp import ClientSession, hdrs
 from aiohttp.typedefs import LooseHeaders
+from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
 from multidict import CIMultiDict
-
-from aws_request_signer import AwsRequestSigner, UNSIGNED_PAYLOAD
 from yarl import URL
+
 
 CHUNK_SIZE = 2 ** 16
 
@@ -63,19 +64,18 @@ class S3Client:
     def get(self, object_name: str, headers: LooseHeaders = None):
         url = str(self.__url / object_name)
         headers = self._make_headers(headers)
-        headers = self.__signer.sign_with_headers(
-            "GET", url, headers=headers
+        headers.extend(
+            self.__signer.sign_with_headers("GET", url, headers=headers)
         )
-
         return self.__session.get(url, headers=headers)
 
     @staticmethod
-    def _make_headers(headers: Optional[LooseHeaders]) -> LooseHeaders:
+    def _make_headers(headers: t.Optional[LooseHeaders]) -> LooseHeaders:
         headers = CIMultiDict(headers or {})
         return headers
 
     def _prepare_headers(
-        self, headers: Optional[LooseHeaders],
+        self, headers: t.Optional[LooseHeaders],
         file_path: str = "",
     ) -> LooseHeaders:
         headers = self._make_headers(headers)
@@ -88,7 +88,10 @@ class S3Client:
 
         return headers
 
-    def put(self, object_name: str, data, *,
+    def put(self,
+            object_name: str,
+            data: t.Union[bytes, str, t.AsyncIterable[bytes]],
+            *,
             data_length: int = None,
             headers: LooseHeaders = None,
             content_sha256: str = None):
@@ -99,23 +102,28 @@ class S3Client:
             data = data.encode()
             data_length = len(data)
 
-        if not data_length:
+        if not data_length and not isinstance(data, AsyncIterable):
             raise ValueError("You must specify data_length argument")
 
         headers = self._prepare_headers(headers)
-        headers[hdrs.CONTENT_LENGTH] = str(data_length)
+        if data_length:
+            headers[hdrs.CONTENT_LENGTH] = str(data_length)
+        else:
+            headers[hdrs.CONTENT_ENCODING] = "chunked"
 
         url = str(self.__url / object_name)
-        headers = self.__signer.sign_with_headers(
-            "PUT", url, headers=headers,
-            content_hash=content_sha256 or UNSIGNED_PAYLOAD,
+        headers.extend(
+            self.__signer.sign_with_headers(
+                "PUT", url, headers=headers,
+                content_hash=content_sha256 or UNSIGNED_PAYLOAD,
+            )
         )
 
         return self.__session.put(url, data=data, headers=headers)
 
     def put_file(
         self, file_path: Path,
-        object_name: Union[str, Path] = None,
+        object_name: t.Union[str, Path] = None,
         *, headers: LooseHeaders = None,
         chunk_size: int = CHUNK_SIZE, content_sha256: str = None
     ):
