@@ -62,7 +62,7 @@ class S3Client:
         )
 
     def get(self, object_name: str, headers: LooseHeaders = None):
-        url = str(self.__url / object_name)
+        url = str(self.__url / object_name.lstrip("/"))
         headers = self._make_headers(headers)
         headers.extend(
             self.__signer.sign_with_headers("GET", url, headers=headers)
@@ -111,7 +111,7 @@ class S3Client:
         else:
             headers[hdrs.CONTENT_ENCODING] = "chunked"
 
-        url = str(self.__url / object_name)
+        url = str(self.__url / object_name.lstrip("/"))
         headers.extend(
             self.__signer.sign_with_headers(
                 "PUT", url, headers=headers,
