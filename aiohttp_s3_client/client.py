@@ -17,7 +17,7 @@ CHUNK_SIZE = 2 ** 16
 
 
 async def file_sender(
-    file_name: Path, executor=None,
+    file_name: t.Union[str, Path], executor=None,
     chunk_size: int = CHUNK_SIZE
 ):
     loop = asyncio.get_event_loop()
@@ -122,7 +122,7 @@ class S3Client:
         return self.__session.put(url, data=data, headers=headers)
 
     def put_file(
-        self, file_path: Path,
+        self, file_path: t.Union[str, Path],
         object_name: t.Union[str, Path] = None,
         *, headers: LooseHeaders = None,
         chunk_size: int = CHUNK_SIZE, content_sha256: str = None
