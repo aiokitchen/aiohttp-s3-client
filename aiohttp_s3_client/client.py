@@ -1,12 +1,12 @@
 import asyncio
 import os
 import typing as t
-from collections import AsyncIterable
 from concurrent.futures.thread import ThreadPoolExecutor
 from mimetypes import guess_type
 from pathlib import Path
 
 from aiohttp import ClientSession, hdrs
+from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.typedefs import LooseHeaders
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
 from multidict import CIMultiDict
@@ -35,6 +35,10 @@ async def file_sender(
         await loop.run_in_executor(executor, fp.close)
 
 
+DataType = t.Union[bytes, str, t.AsyncIterable[bytes]]
+ParamsType = t.Optional[t.Mapping[str, str]]
+
+
 class S3Client:
     def __init__(
         self, session: ClientSession, url: URL,
@@ -61,13 +65,46 @@ class S3Client:
             secret_access_key=secret_access_key,
         )
 
-    def get(self, object_name: str, headers: LooseHeaders = None):
-        url = str(self.__url / object_name.lstrip("/"))
+    def request(
+        self, method: str, path: str,
+        headers: LooseHeaders = None,
+        params: ParamsType = None,
+        data: t.Optional[DataType] = None,
+        data_length: t.Optional[int] = None,
+        content_sha256: str = None,
+        **kwargs
+    ) -> RequestContextManager:
+        if isinstance(data, bytes):
+            data_length = len(data)
+        elif isinstance(data, str):
+            data = data.encode()
+            data_length = len(data)
+
+        headers = self._prepare_headers(headers)
+        if data_length:
+            headers[hdrs.CONTENT_LENGTH] = str(data_length)
+        elif data is not None:
+            headers[hdrs.CONTENT_ENCODING] = "chunked"
+
+        if data is not None and content_sha256 is None:
+            content_sha256 = UNSIGNED_PAYLOAD
+
+        url = str((self.__url / path.lstrip("/")).with_query(params))
         headers = self._make_headers(headers)
         headers.extend(
-            self.__signer.sign_with_headers("GET", url, headers=headers)
+            self.__signer.sign_with_headers(
+                method, url, headers=headers, content_hash=content_sha256
+            )
         )
-        return self.__session.get(url, headers=headers)
+        return self.__session.request(
+            method, url, headers=headers, data=data, **kwargs
+        )
+
+    def get(self, object_name: str, **kwargs) -> RequestContextManager:
+        return self.request("GET", object_name, **kwargs)
+
+    def head(self, object_name: str, **kwargs) -> RequestContextManager:
+        return self.request("HEAD", object_name, **kwargs)
 
     @staticmethod
     def _make_headers(headers: t.Optional[LooseHeaders]) -> LooseHeaders:
@@ -88,38 +125,11 @@ class S3Client:
 
         return headers
 
-    def put(self,
-            object_name: str,
-            data: t.Union[bytes, str, t.AsyncIterable[bytes]],
-            *,
-            data_length: int = None,
-            headers: LooseHeaders = None,
-            content_sha256: str = None):
-
-        if isinstance(data, bytes):
-            data_length = len(data)
-        elif isinstance(data, str):
-            data = data.encode()
-            data_length = len(data)
-
-        if not data_length and not isinstance(data, AsyncIterable):
-            raise ValueError("You must specify data_length argument")
-
-        headers = self._prepare_headers(headers)
-        if data_length:
-            headers[hdrs.CONTENT_LENGTH] = str(data_length)
-        else:
-            headers[hdrs.CONTENT_ENCODING] = "chunked"
-
-        url = str(self.__url / object_name.lstrip("/"))
-        headers.extend(
-            self.__signer.sign_with_headers(
-                "PUT", url, headers=headers,
-                content_hash=content_sha256 or UNSIGNED_PAYLOAD,
-            )
-        )
-
-        return self.__session.put(url, data=data, headers=headers)
+    def put(
+        self, object_name: str,
+        data: t.Union[bytes, str, t.AsyncIterable[bytes]], **kwargs
+    ):
+        return self.request("PUT", object_name, data=data, **kwargs)
 
     def put_file(
         self, object_name: t.Union[str, Path],
@@ -129,7 +139,6 @@ class S3Client:
     ):
 
         headers = self._prepare_headers(headers, str(file_path))
-
         return self.put(
             object_name,
             headers=headers,
