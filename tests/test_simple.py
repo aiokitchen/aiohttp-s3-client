@@ -20,12 +20,7 @@ async def s3_url() -> URL:
 @pytest.fixture
 async def s3_client(loop, s3_url: URL):
     async with ClientSession(raise_for_status=True) as session:
-        yield S3Client(
-            url=s3_url,
-            session=session,
-            access_key_id="tester",
-            secret_access_key="hackme"
-        )
+        yield S3Client(url=s3_url, session=session)
 
 
 @pytest.mark.parametrize("object_name", ("test/test", "/test/test"))
