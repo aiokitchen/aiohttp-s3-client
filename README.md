@@ -31,14 +31,25 @@ async with ClientSession(raise_for_status=True) as session:
     )
 
     # Upload str object to bucket "bucket" and key "str"
-    resp = await client.put("/bucket/str", "hello, world")
-    assert resp.status == HTTPStatus.OK
+    async with client.put("/bucket/str", "hello, world") as resp:
+        assert resp.status == HTTPStatus.OK
 
     # Upload bytes object to bucket "bucket" and key "bytes"
     resp = await client.put("/bucket/bytes", b"hello, world")
     assert resp.status == HTTPStatus.OK
 
-    # Upload bytes object to bucket "bucket" and key "file"
+    # Upload AsyncIterable to bucket "bucket" and key "iterable"
+    async def gen():
+        yield b'some bytes'
+
+    resp = await client.put("/bucket/file", gen())
+    assert resp.status == HTTPStatus.OK
+
+    # Upload file to bucket "bucket" and key "file"
     resp = await client.put_file("/bucket/file", "/path_to_file")
     assert resp.status == HTTPStatus.OK
+
+    # Get object by bucket+key
+    resp = await client.get("/bucket/key")
+    data = await resp.read()
 ```
