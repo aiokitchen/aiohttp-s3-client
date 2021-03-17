@@ -13,7 +13,7 @@ pip install aiohttp-s3-client
 ```
 
 Usage
--------
+-----
 
 ```python
 from http import HTTPStatus
@@ -27,29 +27,47 @@ async with ClientSession(raise_for_status=True) as session:
         url="http://s3-url",
         session=session,
         access_key_id="key-id",
-        secret_access_key="hackme"
+        secret_access_key="hackme",
+        region="us-east-1"
     )
 
     # Upload str object to bucket "bucket" and key "str"
-    async with client.put("/bucket/str", "hello, world") as resp:
+    async with client.put("bucket/str", "hello, world") as resp:
         assert resp.status == HTTPStatus.OK
 
     # Upload bytes object to bucket "bucket" and key "bytes"
-    resp = await client.put("/bucket/bytes", b"hello, world")
+    resp = await client.put("bucket/bytes", b"hello, world")
     assert resp.status == HTTPStatus.OK
 
     # Upload AsyncIterable to bucket "bucket" and key "iterable"
     async def gen():
         yield b'some bytes'
 
-    resp = await client.put("/bucket/file", gen())
+    resp = await client.put("bucket/file", gen())
     assert resp.status == HTTPStatus.OK
 
     # Upload file to bucket "bucket" and key "file"
-    resp = await client.put_file("/bucket/file", "/path_to_file")
+    resp = await client.put_file("bucket/file", "/path_to_file")
     assert resp.status == HTTPStatus.OK
 
     # Get object by bucket+key
-    resp = await client.get("/bucket/key")
+    resp = await client.get("bucket/key")
     data = await resp.read()
+```
+
+Bucket may be specified as subdomain or in object name:
+```python
+client = S3Client(url="http://bucket.your-s3-host", ...)
+resp = await client.put("key", gen())
+
+client = S3Client(url="http://your-s3-host", ...)
+resp = await client.put("bucket/key", gen())
+```
+
+Auth may be specified with keywords or in URL:
+```python
+client = S3Client(url="http://your-s3-host", access_key_id="key_id",
+                  secret_access_key="access_key", ...)
+
+client = S3Client(url="http://key_id:access_key@your-s3-host", ...)
 ```
