@@ -96,7 +96,9 @@ class S3Client:
                 method, url, headers=headers, content_hash=content_sha256
             )
         )
-        return self.__session.request(method, url, headers=headers, data=data, **kwargs)
+        return self.__session.request(
+            method, url, headers=headers, data=data, **kwargs
+        )
 
     def get(self, object_name: str, **kwargs) -> RequestContextManager:
         return self.request("GET", object_name, **kwargs)
