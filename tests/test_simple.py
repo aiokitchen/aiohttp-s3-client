@@ -69,7 +69,7 @@ async def test_put_file(s3_url: URL, s3_client: S3Client):
         f.flush()
 
         # Test upload by file str path
-        async with s3_client.put_file(f.name, "/test/test") as response:
+        async with s3_client.put_file("/test/test", f.name) as response:
             assert response.status == HTTPStatus.OK
 
         async with s3_client.get("/test/test") as response:
@@ -77,7 +77,7 @@ async def test_put_file(s3_url: URL, s3_client: S3Client):
             assert result == data
 
         # Test upload by file Path
-        async with s3_client.put_file(Path(f.name), "/test/test2") as response:
+        async with s3_client.put_file("/test/test2", Path(f.name)) as response:
             assert response.status == HTTPStatus.OK
 
         async with s3_client.get("/test/test2") as response:

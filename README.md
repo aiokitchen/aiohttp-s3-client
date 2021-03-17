@@ -38,7 +38,7 @@ async with ClientSession(raise_for_status=True) as session:
     resp = await client.put("/bucket/bytes", b"hello, world")
     assert resp.status == HTTPStatus.OK
 
-    # Upload bytes object to bucket "bucket" and key "bytes"
-    resp = await client.put_file("/path_to_file", "/bucket/file")
+    # Upload bytes object to bucket "bucket" and key "file"
+    resp = await client.put_file("/bucket/file", "/path_to_file")
     assert resp.status == HTTPStatus.OK
 ```

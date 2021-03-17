@@ -122,8 +122,8 @@ class S3Client:
         return self.__session.put(url, data=data, headers=headers)
 
     def put_file(
-        self, file_path: t.Union[str, Path],
-        object_name: t.Union[str, Path] = None,
+        self, object_name: t.Union[str, Path],
+        file_path: t.Union[str, Path],
         *, headers: LooseHeaders = None,
         chunk_size: int = CHUNK_SIZE, content_sha256: str = None
     ):
