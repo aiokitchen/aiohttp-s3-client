@@ -62,6 +62,9 @@ resp = await client.put("key", gen())
 
 client = S3Client(url="http://your-s3-host", ...)
 resp = await client.put("bucket/key", gen())
+
+client = S3Client(url="http://your-s3-host/bucket", ...)
+resp = await client.put("key", gen())
 ```
 
 Auth may be specified with keywords or in URL:
