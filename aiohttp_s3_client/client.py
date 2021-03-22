@@ -66,6 +66,10 @@ class S3Client:
             secret_access_key=secret_access_key,
         )
 
+    @property
+    def url(self):
+        return self._url
+
     def request(
         self, method: str, path: str,
         headers: LooseHeaders = None,
