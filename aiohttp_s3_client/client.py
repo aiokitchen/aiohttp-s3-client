@@ -94,7 +94,7 @@ class S3Client:
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
 
-        url = (self._url / path).with_query(params)
+        url = (self._url / path.lstrip('/')).with_query(params)
         url = str(url.with_path(quote(url.path), encoded=True))
 
         headers = self._make_headers(headers)
@@ -112,6 +112,9 @@ class S3Client:
 
     def head(self, object_name: str, **kwargs) -> RequestContextManager:
         return self.request("HEAD", object_name, **kwargs)
+
+    def delete(self, object_name: str, **kwargs) -> RequestContextManager:
+        return self.request("DELETE", object_name, **kwargs)
 
     @staticmethod
     def _make_headers(headers: t.Optional[LooseHeaders]) -> LooseHeaders:
