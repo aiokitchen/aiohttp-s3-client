@@ -4,6 +4,7 @@ import typing as t
 from concurrent.futures.thread import ThreadPoolExecutor
 from mimetypes import guess_type
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
@@ -57,10 +58,10 @@ class S3Client:
             raise ValueError("secret_access_key id must be passed as argument "
                              "or as username in the url")
 
-        self.__url = url.with_user(None).with_password(None)
-        self.__session = session
-        self.__executor = executor
-        self.__signer = AwsRequestSigner(
+        self._url = url.with_user(None).with_password(None)
+        self._session = session
+        self._executor = executor
+        self._signer = AwsRequestSigner(
             region=region, service="s3", access_key_id=access_key_id,
             secret_access_key=secret_access_key,
         )
@@ -89,14 +90,16 @@ class S3Client:
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
 
-        url = str((self.__url / path.lstrip("/")).with_query(params))
+        url = self._url.with_path(quote(path), encoded=True).with_query(params)
+        url = str(url)
+
         headers = self._make_headers(headers)
         headers.extend(
-            self.__signer.sign_with_headers(
+            self._signer.sign_with_headers(
                 method, url, headers=headers, content_hash=content_sha256
             )
         )
-        return self.__session.request(
+        return self._session.request(
             method, url, headers=headers, data=data, **kwargs
         )
 
@@ -144,7 +147,7 @@ class S3Client:
             headers=headers,
             data=file_sender(
                 file_path,
-                executor=self.__executor,
+                executor=self._executor,
                 chunk_size=chunk_size,
             ),
             data_length=os.stat(file_path).st_size,
