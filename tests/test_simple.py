@@ -83,3 +83,14 @@ async def test_put_file(s3_url: URL, s3_client: S3Client):
         async with s3_client.get("/test/test2") as response:
             result = await response.read()
             assert result == data
+
+
+async def test_url_path_with_colon(s3_url: URL, s3_client: S3Client):
+    data = b"hello, world"
+    key = "/some-path:with-colon.txt"
+    async with s3_client.put(key, data) as response:
+        assert response.status == HTTPStatus.OK
+
+    async with s3_client.get(key) as response:
+        result = await response.read()
+        assert result == data
