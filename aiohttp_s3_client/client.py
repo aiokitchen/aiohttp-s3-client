@@ -90,8 +90,8 @@ class S3Client:
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
 
-        url = self._url.with_path(quote(path), encoded=True).with_query(params)
-        url = str(url)
+        url = (self._url / path).with_query(params)
+        url = str(url.with_path(quote(url.path), encoded=True))
 
         headers = self._make_headers(headers)
         headers.extend(
