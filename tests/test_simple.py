@@ -1,8 +1,6 @@
-import gzip
 import os
 import sys
 from http import HTTPStatus
-from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Iterable
@@ -16,7 +14,7 @@ from aiohttp_s3_client import S3Client
 
 @pytest.fixture()
 async def s3_url() -> URL:
-    return URL("http://user:hackme@localhost:9000/")
+    return URL(os.getenv("S3_URL"))
 
 
 @pytest.fixture
