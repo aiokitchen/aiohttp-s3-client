@@ -89,7 +89,7 @@ class S3Client:
         if data_length:
             headers[hdrs.CONTENT_LENGTH] = str(data_length)
         elif data is not None:
-            headers[hdrs.CONTENT_ENCODING] = "chunked"
+            kwargs["chunked"] = True
 
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
