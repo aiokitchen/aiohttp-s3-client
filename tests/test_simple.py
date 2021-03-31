@@ -1,6 +1,8 @@
+import gzip
 import os
 import sys
 from http import HTTPStatus
+from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Iterable
@@ -19,7 +21,9 @@ async def s3_url() -> URL:
 
 @pytest.fixture
 async def s3_client(loop, s3_url: URL):
-    async with ClientSession(raise_for_status=True) as session:
+    async with ClientSession(
+        raise_for_status=True, auto_decompress=False
+    ) as session:
         yield S3Client(url=s3_url, session=session)
 
 
@@ -94,3 +98,23 @@ async def test_url_path_with_colon(s3_url: URL, s3_client: S3Client):
     async with s3_client.get(key) as response:
         result = await response.read()
         assert result == data
+
+
+@pytest.mark.parametrize("object_name", ("test/test", "/test/test"))
+async def test_put_compression(s3_url: URL, s3_client: S3Client, object_name):
+    async def async_iterable(iterable: Iterable[bytes]):
+        for i in iterable:  # type: int
+            yield i.to_bytes(1, sys.byteorder)
+
+    data = b"hello, world"
+    async with s3_client.put(
+        object_name, async_iterable(data), compress="gzip",
+    ) as response:
+        assert response.status == HTTPStatus.OK
+
+    async with s3_client.get(object_name) as response:
+        result = await response.read()
+        # assert response.headers[hdrs.CONTENT_ENCODING] == "gzip"
+        # FIXME: uncomment after update fakes3 image
+        actual = gzip.GzipFile(fileobj=BytesIO(result)).read()
+        assert actual == data
