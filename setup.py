@@ -31,7 +31,6 @@ setup(
         "Operating System :: Microsoft",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
@@ -42,7 +41,7 @@ setup(
     install_requires=[
         "aiomisc~=14.4", "aiohttp<4", "aws-request-signer==1.0.0",
     ],
-    python_requires=">3.6.*, <4",
+    python_requires=">3.7.*, <4",
     extras_require={
         "develop": [
             "coverage!=4.3",
