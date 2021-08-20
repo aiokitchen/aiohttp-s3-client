@@ -9,7 +9,7 @@ NS = "http://s3.amazonaws.com/doc/2006-03-01/"
 def parse_create_multipart_upload_id(payload: bytes) -> str:
     root = ET.fromstring(payload)
     uploadid_el = root.find(f"{{{NS}}}UploadId")
-    if not uploadid_el:
+    if uploadid_el is None:
         uploadid_el = root.find("UploadId")
     return uploadid_el.text
 
