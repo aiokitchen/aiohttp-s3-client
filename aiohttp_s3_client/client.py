@@ -4,7 +4,6 @@ import os
 import typing as t
 import logging
 from collections import deque
-from concurrent.futures.thread import ThreadPoolExecutor
 from http import HTTPStatus
 from mimetypes import guess_type
 from pathlib import Path
@@ -135,7 +134,7 @@ class S3Client:
         )
 
     async def get(self, object_name: str, **kwargs) -> RequestContextManager:
-        return self.request("GET", object_name, **kwargs)
+        return await self.request("GET", object_name, **kwargs)
 
     async def head(
         self, object_name: str,
@@ -199,11 +198,9 @@ class S3Client:
         return self.put(
             str(object_name),
             headers=headers,
-            data=gen_with_hash(
-                async_file_sender(
-                    file_path,
-                    chunk_size=chunk_size,
-                )
+            data=async_file_sender(
+                file_path,
+                chunk_size=chunk_size,
             ),
             data_length=os.stat(file_path).st_size,
             content_sha256=content_sha256,
@@ -239,12 +236,14 @@ class S3Client:
         part_no: int,
         data: bytes,
         content_sha256: str,
+        **kwargs,
     ) -> str:
         resp = await self.put(
             object_name,
             params={"partNumber": part_no, "uploadId": upload_id},
             data=data,
             content_sha256=content_sha256,
+            **kwargs,
         )
         payload = await resp.text()
         if resp.status != HTTPStatus.OK:
@@ -252,7 +251,7 @@ class S3Client:
                 f"Wrong status code {resp.status} from s3 with message "
                 f"{payload}."
             )
-        return resp.headers["Etag"]
+        return resp.headers["Etag"].strip('"')
 
     @asyncbackoff(
         None, None, None,
@@ -265,13 +264,19 @@ class S3Client:
         parts: t.List[t.Tuple[int, str]],
     ):
         complete_upload_request = create_complete_upload_request(parts)
-        await self.post(
+        resp = await self.post(
             object_name,
             headers={"Content-Type": "text/xml"},
             params={"uploadId": upload_id},
             data=complete_upload_request,
             content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
         )
+        if resp.status != HTTPStatus.OK:
+            payload = await resp.text()
+            raise AwsUploadFailed(
+                f"Wrong status code {resp.status} from s3 with message "
+                f"{payload}."
+            )
 
     async def _part_uploader(
         self,
@@ -280,6 +285,7 @@ class S3Client:
         parts_queue: asyncio.Queue,
         results_queue: deque,
         part_upload_tries: int,
+        **kwargs,
     ):
         backoff = asyncbackoff(
             None, None, None,
@@ -294,6 +300,7 @@ class S3Client:
                 part_no=part_no,
                 data=part,
                 content_sha256=part_hash,
+                **kwargs,
             )
             log.debug(
                 "Etag for part %d of %s is %s", part_no, upload_id, etag,
@@ -309,7 +316,9 @@ class S3Client:
         part_size: int = PART_SIZE,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
+        part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
+        **kwargs,
     ):
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
@@ -324,7 +333,9 @@ class S3Client:
             headers=headers,
             workers_count=workers_count,
             max_size=max_size,
+            part_upload_tries=part_upload_tries,
             calculate_content_sha256=calculate_content_sha256,
+            **kwargs,
         )
 
     async def put_multipart(
@@ -337,6 +348,7 @@ class S3Client:
         max_size: t.Optional[int] = None,
         part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
+        **kwargs,
     ):
         if workers_count < 1:
             raise ValueError(
@@ -350,7 +362,6 @@ class S3Client:
         )
         log.debug("Got upload id %s for %s", upload_id, object_name)
 
-        parts = []
         part_no = 1
         parts_queue = asyncio.Queue(maxsize=max_size)
         results_queue = deque()
@@ -362,6 +373,7 @@ class S3Client:
                     parts_queue,
                     results_queue,
                     part_upload_tries,
+                    **kwargs,
                 )
             )
             for _ in range(workers_count)
@@ -374,7 +386,7 @@ class S3Client:
 
         async for part_hash, part in gen:
             log.debug(
-                "Sending part %d (%d bytes) of upload %s to %s",
+                "Reading part %d (%d bytes) of upload %s to %s",
                 part_no, len(part), upload_id, object_name,
             )
             await parts_queue.put((part_no, part_hash, part))
@@ -390,6 +402,8 @@ class S3Client:
             part_no - 1, upload_id, object_name,
         )
 
+        # Parts should be in ascending order
+        parts = sorted(results_queue, key=lambda x: x[0])
         await self._complete_multipart_upload(
-            upload_id, object_name, list(results_queue),
+            upload_id, object_name, parts,
         )

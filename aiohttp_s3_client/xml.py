@@ -14,7 +14,7 @@ def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
 
     for part_no, etag in parts:
         part_el = ET.SubElement(root, "Part")
-        etag_el = ET.SubElement(part_el, "Etag")
+        etag_el = ET.SubElement(part_el, "ETag")
         etag_el.text = etag
         part_number_el = ET.SubElement(part_el, "PartNumber")
         part_number_el.text = str(part_no)
