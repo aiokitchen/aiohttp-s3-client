@@ -11,6 +11,8 @@ def parse_create_multipart_upload_id(payload: bytes) -> str:
     uploadid_el = root.find(f"{{{NS}}}UploadId")
     if uploadid_el is None:
         uploadid_el = root.find("UploadId")
+    if uploadid_el is None or uploadid_el.text is None:
+        raise ValueError(f"Upload id not found in {payload!r}")
     return uploadid_el.text
 
 

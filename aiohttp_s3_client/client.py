@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
-from aiohttp.client import _RequestContextManager as RequestContextManager
+from aiohttp.client import ClientResponse
 from aiohttp.client_exceptions import ClientError
 from aiohttp.typedefs import LooseHeaders
 from aiomisc import asyncbackoff, threaded_iterable
@@ -39,15 +39,15 @@ class AwsUploadFailed(ClientError):
 @threaded_iterable
 def gen_without_hash(
     stream: t.Iterable[bytes],
-) -> t.AsyncGenerator[t.Tuple[str, bytes], None]:
+) -> t.Generator[t.Tuple[None, bytes], None, None]:
     for data in stream:
-        yield None, data
+        yield (None, data)
 
 
 @threaded_iterable
 def gen_with_hash(
     stream: t.Iterable[bytes],
-) -> t.AsyncGenerator[t.Tuple[str, bytes], None]:
+) -> t.Generator[t.Tuple[str, bytes], None, None]:
     for data in stream:
         yield hashlib.sha256(data).hexdigest(), data
 
@@ -110,7 +110,7 @@ class S3Client:
         data_length: t.Optional[int] = None,
         content_sha256: str = None,
         **kwargs,
-    ) -> RequestContextManager:
+    ) -> ClientResponse:
         if isinstance(data, bytes):
             data_length = len(data)
         elif isinstance(data, str):
@@ -139,14 +139,14 @@ class S3Client:
             method, url, headers=headers, data=data, **kwargs,
         )
 
-    async def get(self, object_name: str, **kwargs) -> RequestContextManager:
+    async def get(self, object_name: str, **kwargs) -> ClientResponse:
         return await self.request("GET", object_name, **kwargs)
 
     async def head(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs,
-    ) -> RequestContextManager:
+    ) -> ClientResponse:
         return await self.request(
             "HEAD", object_name, content_sha256=content_sha256, **kwargs,
         )
@@ -155,7 +155,7 @@ class S3Client:
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs,
-    ) -> RequestContextManager:
+    ) -> ClientResponse:
         return await self.request(
             "DELETE", object_name, content_sha256=content_sha256, **kwargs,
         )
@@ -213,7 +213,7 @@ class S3Client:
         )
 
     @asyncbackoff(
-        None, None, None,
+        None, None, 0,
         max_tries=3, exceptions=(AwsUploadFailed, ClientError),
     )
     async def _create_multipart_upload(
@@ -260,7 +260,7 @@ class S3Client:
         return resp.headers["Etag"].strip('"')
 
     @asyncbackoff(
-        None, None, None,
+        None, None, 0,
         max_tries=3, exceptions=(AwsUploadFailed, ClientError),
     )
     async def _complete_multipart_upload(
@@ -294,7 +294,7 @@ class S3Client:
         **kwargs,
     ):
         backoff = asyncbackoff(
-            None, None, None,
+            None, None,
             max_tries=part_upload_tries,
             exceptions=(AwsUploadFailed, ClientError),
         )
@@ -303,7 +303,7 @@ class S3Client:
             if msg is DONE:
                 break
             part_no, part_hash, part = msg
-            etag = await backoff(self._put_part)(
+            etag = await backoff(self._put_part)(  # type: ignore
                 upload_id=upload_id,
                 object_name=object_name,
                 part_no=part_no,
@@ -365,15 +365,15 @@ class S3Client:
             )
         max_size = max_size or workers_count
 
-        upload_id = await self._create_multipart_upload(
+        upload_id = await self._create_multipart_upload(  # type: ignore
             str(object_name),
             headers=headers,
         )
         log.debug("Got upload id %s for %s", upload_id, object_name)
 
         part_no = 1
-        parts_queue = asyncio.Queue(maxsize=max_size)
-        results_queue = deque()
+        parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
+        results_queue: deque = deque()
         workers = [
             asyncio.create_task(
                 self._part_uploader(
@@ -413,6 +413,6 @@ class S3Client:
 
         # Parts should be in ascending order
         parts = sorted(results_queue, key=lambda x: x[0])
-        await self._complete_multipart_upload(
+        await self._complete_multipart_upload(  # type: ignore
             upload_id, object_name, parts,
         )
