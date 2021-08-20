@@ -5,15 +5,13 @@ aiohttp-s3-client
 
 The simple module for putting and getting object from Amazon S3 compatible endpoints
 
-Installation
-------------
+## Installation
 
 ```bash
 pip install aiohttp-s3-client
 ```
 
-Usage
------
+## Usage
 
 ```python
 from http import HTTPStatus
@@ -81,4 +79,21 @@ client = S3Client(url="http://your-s3-host", access_key_id="key_id",
                   secret_access_key="access_key", ...)
 
 client = S3Client(url="http://key_id:access_key@your-s3-host", ...)
+```
+
+## Multipart upload
+
+For uploading large files [multipart uploading](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html)
+can be used. It allows you to asynchronously upload multiple parts of a file
+to S3.
+
+```python
+client = S3Client()
+await client.put_file_multipart(
+    "test/bigfile.csv",
+    headers={
+    	"Content-Type": "text/csv",
+    },
+    workers_count=8,
+)
 ```

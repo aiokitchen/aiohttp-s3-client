@@ -332,6 +332,20 @@ class S3Client:
         calculate_content_sha256: bool = True,
         **kwargs,
     ):
+        """
+        Upload data from a file with multipart upload
+
+        object_name: key in s3
+        file_path: path to a file for upload
+        headers: additional headers, such as Content-Type
+        part_size: size of a chunk to send (recommended: >5Mb)
+        workers_count: count of coroutines for asyncronous parts uploading
+        max_size: maximum size of a queue with data to send (should be
+            at least `workers_count`)
+        part_upload_tries: how many times trying to put part to s3 before fail
+        calculate_content_sha256: whether to calculate sha256 hash of a part
+            for integrity purposes
+        """
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
             file_path, object_name, part_size,
@@ -362,6 +376,19 @@ class S3Client:
         calculate_content_sha256: bool = True,
         **kwargs,
     ):
+        """
+        Send data from iterable with multipart upload
+
+        object_name: key in s3
+        data: any iterable that returns chunks of bytes
+        headers: additional headers, such as Content-Type
+        workers_count: count of coroutines for asyncronous parts uploading
+        max_size: maximum size of a queue with data to send (should be
+            at least `workers_count`)
+        part_upload_tries: how many times trying to put part to s3 before fail
+        calculate_content_sha256: whether to calculate sha256 hash of a part
+            for integrity purposes
+        """
         if workers_count < 1:
             raise ValueError(
                 f"Workers count should be > 0. Got {workers_count}",
