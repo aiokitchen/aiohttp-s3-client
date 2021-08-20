@@ -3,19 +3,20 @@ from typing import List, Tuple
 from xml.etree import ElementTree as ET
 
 
+NS = "http://s3.amazonaws.com/doc/2006-03-01/"
+
+
 def parse_create_multipart_upload_id(payload: bytes) -> str:
     root = ET.fromstring(payload)
-    uploadid_el = root.find(
-        "{http://s3.amazonaws.com/doc/2006-03-01/}UploadId"
-    )
+    uploadid_el = root.find(f"{{{NS}}}UploadId")
     if not uploadid_el:
         uploadid_el = root.find("UploadId")
     return uploadid_el.text
 
 
 def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
-    ns = "http://s3.amazonaws.com/doc/2006-03-01/"
-    root = ET.Element(f"{{{ns}}}CompleteMultipartUpload", nsmap={None: ns})
+    ET.register_namespace("", NS)
+    root = ET.Element(f"{{{NS}}}CompleteMultipartUpload")
 
     for part_no, etag in parts:
         part_el = ET.SubElement(root, "Part")
@@ -24,4 +25,7 @@ def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
         part_number_el = ET.SubElement(part_el, "PartNumber")
         part_number_el.text = str(part_no)
 
-    return ET.tostring(root, xml_declaration=True, encoding="UTF-8")
+    return (
+        b'<?xml version="1.0" encoding="UTF-8"?>' +
+        ET.tostring(root, encoding="UTF-8")
+    )

@@ -270,6 +270,7 @@ class S3Client:
         parts: t.List[t.Tuple[int, str]],
     ):
         complete_upload_request = create_complete_upload_request(parts)
+        print(complete_upload_request)
         resp = await self.post(
             object_name,
             headers={"Content-Type": "text/xml"},
