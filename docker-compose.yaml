@@ -1,0 +1,10 @@
+version: "3.4"
+services:
+  s3:
+    restart: always
+    image: adobe/s3mock
+    ports:
+      - 9191:9191
+      - 9090:9090
+    environment:
+      initialBuckets: test
