@@ -2,21 +2,40 @@ import asyncio
 import hashlib
 import os
 import typing as t
+import logging
+from collections import deque
 from concurrent.futures.thread import ThreadPoolExecutor
+from http import HTTPStatus
 from mimetypes import guess_type
 from pathlib import Path
 from urllib.parse import quote
 
+from aiomisc import asyncbackoff
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
+from aiohttp.client_exceptions import ClientError
 from aiohttp.typedefs import LooseHeaders
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
 from multidict import CIMultiDict
 from yarl import URL
 
+from aiohttp_s3_client.xml import (
+    create_complete_upload_request,
+    parse_create_multipart_upload_id,
+)
+
+
+log = logging.getLogger(__name__)
+
 
 CHUNK_SIZE = 2 ** 16
+DONE = object()
 EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
+PART_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+class AwsUploadFailed(ClientError):
+    pass
 
 
 async def file_sender(
@@ -60,7 +79,7 @@ class S3Client:
             raise ValueError("secret_access_key id must be passed as argument "
                              "or as username in the url")
 
-        self._url = url.with_user(None).with_password(None)
+        self._url = URL(url).with_user(None).with_password(None)
         self._session = session
         self._executor = executor
         self._signer = AwsRequestSigner(
@@ -72,7 +91,7 @@ class S3Client:
     def url(self):
         return self._url
 
-    def request(
+    async def request(
         self, method: str, path: str,
         headers: LooseHeaders = None,
         params: ParamsType = None,
@@ -96,8 +115,8 @@ class S3Client:
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
 
-        url = (self._url / path.lstrip('/')).with_query(params)
-        url = url.with_path(quote(url.path), encoded=True)
+        url = (self._url / path.lstrip('/'))
+        url = url.with_path(quote(url.path), encoded=True).with_query(params)
 
         headers = self._make_headers(headers)
         headers.extend(
@@ -105,28 +124,28 @@ class S3Client:
                 method, str(url), headers=headers, content_hash=content_sha256
             )
         )
-        return self._session.request(
+        return await self._session.request(
             method, url, headers=headers, data=data, **kwargs
         )
 
-    def get(self, object_name: str, **kwargs) -> RequestContextManager:
+    async def get(self, object_name: str, **kwargs) -> RequestContextManager:
         return self.request("GET", object_name, **kwargs)
 
-    def head(
+    async def head(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs
     ) -> RequestContextManager:
-        return self.request(
+        return await self.request(
             "HEAD", object_name, content_sha256=content_sha256, **kwargs
         )
 
-    def delete(
+    async def delete(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs
     ) -> RequestContextManager:
-        return self.request(
+        return await self.request(
             "DELETE", object_name, content_sha256=content_sha256, **kwargs
         )
 
@@ -156,6 +175,13 @@ class S3Client:
     ):
         return self.request("PUT", object_name, data=data, **kwargs)
 
+    def post(
+        self, object_name: str,
+        data: t.Union[None, bytes, str, t.AsyncIterable[bytes]] = None,
+        **kwargs,
+    ):
+        return self.request("POST", object_name, data=data, **kwargs)
+
     def put_file(
         self, object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
@@ -174,4 +200,178 @@ class S3Client:
             ),
             data_length=os.stat(file_path).st_size,
             content_sha256=content_sha256,
+        )
+
+    @asyncbackoff(
+        None, None, None,
+        max_tries=3, exceptions=(AwsUploadFailed, ClientError),
+    )
+    async def _create_multipart_upload(
+        self,
+        object_name: str,
+        headers: LooseHeaders = None,
+    ) -> str:
+        resp = await self.post(
+            object_name,
+            headers=headers,
+            params={"uploads": 1},
+            content_sha256=UNSIGNED_PAYLOAD,
+        )
+        payload = await resp.read()
+        if resp.status != HTTPStatus.OK:
+            raise AwsUploadFailed(
+                f"Wrong status code {resp.status} from s3 with message "
+                f"{payload.decode()}."
+            )
+        return parse_create_multipart_upload_id(payload)
+
+    async def _put_part(
+        self,
+        upload_id: str,
+        object_name: str,
+        part_no: int,
+        data: bytes,
+    ) -> str:
+        resp = await self.put(
+            object_name,
+            params={"partNumber": part_no, "uploadId": upload_id},
+            data=data,
+        )
+        payload = await resp.text()
+        if resp.status != HTTPStatus.OK:
+            raise AwsUploadFailed(
+                f"Wrong status code {resp.status} from s3 with message "
+                f"{payload}."
+            )
+        return resp.headers["Etag"]
+
+    @asyncbackoff(
+        None, None, None,
+        max_tries=3, exceptions=(AwsUploadFailed, ClientError),
+    )
+    async def _complete_multipart_upload(
+        self,
+        upload_id: str,
+        object_name: str,
+        parts: t.List[t.Tuple[int, str]],
+    ):
+        complete_upload_request = create_complete_upload_request(parts)
+        await self.post(
+            object_name,
+            headers={"Content-Type": "text/xml"},
+            params={"uploadId": upload_id},
+            data=complete_upload_request,
+        )
+
+    async def _part_uploader(
+        self,
+        upload_id: str,
+        object_name: str,
+        parts_queue: asyncio.Queue,
+        results_queue: deque,
+        part_upload_tries: int,
+    ):
+        backoff = asyncbackoff(
+            None, None, None,
+            max_tries=part_upload_tries,
+            exceptions=(AwsUploadFailed, ClientError),
+        )
+        while (msg := await parts_queue.get()) is not DONE:
+            part_no, part = msg
+            etag = await backoff(self._put_part)(
+                upload_id=upload_id,
+                object_name=object_name,
+                part_no=part_no,
+                data=part,
+            )
+            log.debug(
+                "Etag for part %d of %s is %s", part_no, upload_id, etag,
+            )
+            results_queue.append((part_no, etag))
+
+    async def put_file_multipart(
+        self,
+        object_name: t.Union[str, Path],
+        file_path: t.Union[str, Path],
+        *,
+        headers: LooseHeaders = None,
+        part_size: int = PART_SIZE,
+        workers_count: int = 1,
+        max_size: t.Optional[int] = None,
+    ):
+        log.debug(
+            "Going to multipart upload %s to %s with part size %d",
+            file_path, object_name, part_size,
+        )
+        await self.put_multipart(
+            object_name,
+            file_sender(
+                file_path,
+                executor=self._executor,
+                chunk_size=part_size,
+            ),
+            headers=headers,
+            workers_count=workers_count,
+            max_size=max_size,
+        )
+
+    async def put_multipart(
+        self,
+        object_name: t.Union[str, Path],
+        data: t.AsyncIterable[bytes],
+        *,
+        headers: LooseHeaders = None,
+        workers_count: int = 1,
+        max_size: t.Optional[int] = None,
+        part_upload_tries: int = 3,
+    ):
+        if workers_count < 1:
+            raise ValueError(
+                f"Workers count should be > 0. Got {workers_count}",
+            )
+        max_size = max_size or workers_count
+
+        upload_id = await self._create_multipart_upload(
+            str(object_name),
+            headers=headers,
+        )
+        log.debug("Got upload id %s for %s", upload_id, object_name)
+
+        parts = []
+        part_no = 1
+        parts_queue = asyncio.Queue(maxsize=max_size)
+        results_queue = deque()
+        workers = [
+            asyncio.create_task(
+                self._part_uploader(
+                    upload_id,
+                    str(object_name),
+                    parts_queue,
+                    results_queue,
+                    part_upload_tries,
+                )
+            )
+            for _ in range(workers_count)
+        ]
+
+        async for part in data:
+            log.debug(
+                "Sending part %d (%d bytes) of upload %s to %s",
+                part_no, len(part), upload_id, object_name,
+            )
+            await parts_queue.put((part_no, part))
+            part_no += 1
+
+        for _ in range(workers_count):
+            await parts_queue.put(DONE)
+
+        await asyncio.gather(*workers)
+
+        log.debug(
+            "All parts (#%d) of %s are uploaded to %s",
+            part_no - 1, upload_id, object_name,
+        )
+
+        await self._complete_multipart_upload(
+            upload_id, object_name, list(results_queue),
         )
