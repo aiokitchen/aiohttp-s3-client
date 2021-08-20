@@ -32,11 +32,14 @@ EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
 
 
+threaded_iterable_constrained = threaded_iterable(max_size=2)
+
+
 class AwsUploadFailed(ClientError):
     pass
 
 
-@threaded_iterable
+@threaded_iterable_constrained
 def gen_without_hash(
     stream: t.Iterable[bytes],
 ) -> t.Generator[t.Tuple[None, bytes], None, None]:
@@ -44,7 +47,7 @@ def gen_without_hash(
         yield (None, data)
 
 
-@threaded_iterable
+@threaded_iterable_constrained
 def gen_with_hash(
     stream: t.Iterable[bytes],
 ) -> t.Generator[t.Tuple[str, bytes], None, None]:
@@ -63,7 +66,7 @@ def file_sender(
             yield data
 
 
-async_file_sender = threaded_iterable(file_sender)
+async_file_sender = threaded_iterable_constrained(file_sender)
 
 
 DataType = t.Union[bytes, str, t.AsyncIterable[bytes]]
@@ -393,13 +396,14 @@ class S3Client:
         else:
             gen = gen_without_hash(data)
 
-        async for part_hash, part in gen:
-            log.debug(
-                "Reading part %d (%d bytes) of upload %s to %s",
-                part_no, len(part), upload_id, object_name,
-            )
-            await parts_queue.put((part_no, part_hash, part))
-            part_no += 1
+        async with gen:
+            async for part_hash, part in gen:
+                log.debug(
+                    "Reading part %d (%d bytes) of upload %s to %s",
+                    part_no, len(part), upload_id, object_name,
+                )
+                await parts_queue.put((part_no, part_hash, part))
+                part_no += 1
 
         for _ in range(workers_count):
             await parts_queue.put(DONE)
