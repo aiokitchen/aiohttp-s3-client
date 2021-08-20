@@ -56,7 +56,10 @@ def file_sender(
     file_name: t.Union[str, Path], chunk_size: int = CHUNK_SIZE,
 ) -> t.Iterable[bytes]:
     with open(file_name, "rb") as fp:
-        while data := fp.read(chunk_size):
+        while True:
+            data = fp.read(chunk_size)
+            if not data:
+                break
             yield data
 
 
@@ -295,7 +298,10 @@ class S3Client:
             max_tries=part_upload_tries,
             exceptions=(AwsUploadFailed, ClientError),
         )
-        while (msg := await parts_queue.get()) is not DONE:
+        while True:
+            msg = await parts_queue.get()
+            if msg is DONE:
+                break
             part_no, part_hash, part = msg
             etag = await backoff(self._put_part)(
                 upload_id=upload_id,
