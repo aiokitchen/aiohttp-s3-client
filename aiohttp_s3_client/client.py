@@ -1,26 +1,25 @@
 import asyncio
 import hashlib
+import logging
 import os
 import typing as t
-import logging
 from collections import deque
 from http import HTTPStatus
 from mimetypes import guess_type
 from pathlib import Path
 from urllib.parse import quote
 
-from aiomisc import asyncbackoff, threaded_iterable
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
 from aiohttp.typedefs import LooseHeaders
+from aiomisc import asyncbackoff, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
 from multidict import CIMultiDict
 from yarl import URL
 
 from aiohttp_s3_client.xml import (
-    create_complete_upload_request,
-    parse_create_multipart_upload_id,
+    create_complete_upload_request, parse_create_multipart_upload_id,
 )
 
 
@@ -54,7 +53,7 @@ def gen_with_hash(
 
 
 def file_sender(
-    file_name: t.Union[str, Path], chunk_size: int = CHUNK_SIZE
+    file_name: t.Union[str, Path], chunk_size: int = CHUNK_SIZE,
 ) -> t.Iterable[bytes]:
     with open(file_name, "rb") as fp:
         while data := fp.read(chunk_size):
@@ -79,11 +78,15 @@ class S3Client:
         secret_access_key = secret_access_key or url.password
 
         if not access_key_id:
-            raise ValueError("access_key id must be passed as argument "
-                             "or as username in the url")
+            raise ValueError(
+                "access_key id must be passed as argument "
+                "or as username in the url",
+            )
         if not secret_access_key:
-            raise ValueError("secret_access_key id must be passed as argument "
-                             "or as username in the url")
+            raise ValueError(
+                "secret_access_key id must be passed as argument "
+                "or as username in the url",
+            )
 
         self._url = URL(url).with_user(None).with_password(None)
         self._session = session
@@ -103,7 +106,7 @@ class S3Client:
         data: t.Optional[DataType] = None,
         data_length: t.Optional[int] = None,
         content_sha256: str = None,
-        **kwargs
+        **kwargs,
     ) -> RequestContextManager:
         if isinstance(data, bytes):
             data_length = len(data)
@@ -120,17 +123,17 @@ class S3Client:
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
 
-        url = (self._url / path.lstrip('/'))
+        url = (self._url / path.lstrip("/"))
         url = url.with_path(quote(url.path), encoded=True).with_query(params)
 
         headers = self._make_headers(headers)
         headers.extend(
             self._signer.sign_with_headers(
-                method, str(url), headers=headers, content_hash=content_sha256
-            )
+                method, str(url), headers=headers, content_hash=content_sha256,
+            ),
         )
         return await self._session.request(
-            method, url, headers=headers, data=data, **kwargs
+            method, url, headers=headers, data=data, **kwargs,
         )
 
     async def get(self, object_name: str, **kwargs) -> RequestContextManager:
@@ -139,19 +142,19 @@ class S3Client:
     async def head(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
-        **kwargs
+        **kwargs,
     ) -> RequestContextManager:
         return await self.request(
-            "HEAD", object_name, content_sha256=content_sha256, **kwargs
+            "HEAD", object_name, content_sha256=content_sha256, **kwargs,
         )
 
     async def delete(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
-        **kwargs
+        **kwargs,
     ) -> RequestContextManager:
         return await self.request(
-            "DELETE", object_name, content_sha256=content_sha256, **kwargs
+            "DELETE", object_name, content_sha256=content_sha256, **kwargs,
         )
 
     @staticmethod
@@ -176,7 +179,7 @@ class S3Client:
 
     def put(
         self, object_name: str,
-        data: t.Union[bytes, str, t.AsyncIterable[bytes]], **kwargs
+        data: t.Union[bytes, str, t.AsyncIterable[bytes]], **kwargs,
     ):
         return self.request("PUT", object_name, data=data, **kwargs)
 
@@ -191,7 +194,7 @@ class S3Client:
         self, object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
         *, headers: LooseHeaders = None,
-        chunk_size: int = CHUNK_SIZE, content_sha256: str = None
+        chunk_size: int = CHUNK_SIZE, content_sha256: str = None,
     ):
 
         headers = self._prepare_headers(headers, str(file_path))
@@ -225,7 +228,7 @@ class S3Client:
         if resp.status != HTTPStatus.OK:
             raise AwsUploadFailed(
                 f"Wrong status code {resp.status} from s3 with message "
-                f"{payload.decode()}."
+                f"{payload.decode()}.",
             )
         return parse_create_multipart_upload_id(payload)
 
@@ -249,7 +252,7 @@ class S3Client:
         if resp.status != HTTPStatus.OK:
             raise AwsUploadFailed(
                 f"Wrong status code {resp.status} from s3 with message "
-                f"{payload}."
+                f"{payload}.",
             )
         return resp.headers["Etag"].strip('"')
 
@@ -275,7 +278,7 @@ class S3Client:
             payload = await resp.text()
             raise AwsUploadFailed(
                 f"Wrong status code {resp.status} from s3 with message "
-                f"{payload}."
+                f"{payload}.",
             )
 
     async def _part_uploader(
@@ -374,7 +377,7 @@ class S3Client:
                     results_queue,
                     part_upload_tries,
                     **kwargs,
-                )
+                ),
             )
             for _ in range(workers_count)
         ]

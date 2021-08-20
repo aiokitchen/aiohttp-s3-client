@@ -1,5 +1,3 @@
-from http import HTTPStatus
-
 import pytest
 
 from aiohttp_s3_client import S3Client

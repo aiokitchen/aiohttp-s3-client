@@ -1,4 +1,4 @@
-from typing import Tuple, List
+from typing import List, Tuple
 
 from lxml import etree as ET
 
