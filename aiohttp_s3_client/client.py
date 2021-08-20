@@ -10,7 +10,7 @@ from mimetypes import guess_type
 from pathlib import Path
 from urllib.parse import quote
 
-from aiomisc import asyncbackoff
+from aiomisc import asyncbackoff, threaded_iterable
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
@@ -38,23 +38,31 @@ class AwsUploadFailed(ClientError):
     pass
 
 
-async def file_sender(
-    file_name: t.Union[str, Path], executor=None,
-    chunk_size: int = CHUNK_SIZE
-):
-    loop = asyncio.get_event_loop()
-    fp = await loop.run_in_executor(executor, open, file_name, "rb")
+@threaded_iterable
+def gen_without_hash(
+    stream: t.Iterable[bytes],
+) -> t.AsyncGenerator[t.Tuple[str, bytes], None]:
+    for data in stream:
+        yield None, data
 
-    try:
-        data = await loop.run_in_executor(executor, fp.read, chunk_size)
-        while data:
-            yield data
-            data = await loop.run_in_executor(executor, fp.read, chunk_size)
 
-        if data:
+@threaded_iterable
+def gen_with_hash(
+    stream: t.Iterable[bytes],
+) -> t.AsyncGenerator[t.Tuple[str, bytes], None]:
+    for data in stream:
+        yield hashlib.sha256(data).hexdigest(), data
+
+
+def file_sender(
+    file_name: t.Union[str, Path], chunk_size: int = CHUNK_SIZE
+) -> t.Iterable[bytes]:
+    with open(file_name, "rb") as fp:
+        while data := fp.read(chunk_size):
             yield data
-    finally:
-        await loop.run_in_executor(executor, fp.close)
+
+
+async_file_sender = threaded_iterable(file_sender)
 
 
 DataType = t.Union[bytes, str, t.AsyncIterable[bytes]]
@@ -67,7 +75,6 @@ class S3Client:
         secret_access_key: str = None,
         access_key_id: str = None,
         region: str = "",
-        executor: ThreadPoolExecutor = None,
     ):
         access_key_id = access_key_id or url.user
         secret_access_key = secret_access_key or url.password
@@ -81,7 +88,6 @@ class S3Client:
 
         self._url = URL(url).with_user(None).with_password(None)
         self._session = session
-        self._executor = executor
         self._signer = AwsRequestSigner(
             region=region, service="s3", access_key_id=access_key_id,
             secret_access_key=secret_access_key,
@@ -193,10 +199,11 @@ class S3Client:
         return self.put(
             str(object_name),
             headers=headers,
-            data=file_sender(
-                file_path,
-                executor=self._executor,
-                chunk_size=chunk_size,
+            data=gen_with_hash(
+                async_file_sender(
+                    file_path,
+                    chunk_size=chunk_size,
+                )
             ),
             data_length=os.stat(file_path).st_size,
             content_sha256=content_sha256,
@@ -215,7 +222,7 @@ class S3Client:
             object_name,
             headers=headers,
             params={"uploads": 1},
-            content_sha256=UNSIGNED_PAYLOAD,
+            content_sha256=EMPTY_STR_HASH,
         )
         payload = await resp.read()
         if resp.status != HTTPStatus.OK:
@@ -231,11 +238,13 @@ class S3Client:
         object_name: str,
         part_no: int,
         data: bytes,
+        content_sha256: str,
     ) -> str:
         resp = await self.put(
             object_name,
             params={"partNumber": part_no, "uploadId": upload_id},
             data=data,
+            content_sha256=content_sha256,
         )
         payload = await resp.text()
         if resp.status != HTTPStatus.OK:
@@ -261,6 +270,7 @@ class S3Client:
             headers={"Content-Type": "text/xml"},
             params={"uploadId": upload_id},
             data=complete_upload_request,
+            content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
         )
 
     async def _part_uploader(
@@ -277,12 +287,13 @@ class S3Client:
             exceptions=(AwsUploadFailed, ClientError),
         )
         while (msg := await parts_queue.get()) is not DONE:
-            part_no, part = msg
+            part_no, part_hash, part = msg
             etag = await backoff(self._put_part)(
                 upload_id=upload_id,
                 object_name=object_name,
                 part_no=part_no,
                 data=part,
+                content_sha256=part_hash,
             )
             log.debug(
                 "Etag for part %d of %s is %s", part_no, upload_id, etag,
@@ -298,6 +309,7 @@ class S3Client:
         part_size: int = PART_SIZE,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
+        calculate_content_sha256: bool = True,
     ):
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
@@ -307,23 +319,24 @@ class S3Client:
             object_name,
             file_sender(
                 file_path,
-                executor=self._executor,
                 chunk_size=part_size,
             ),
             headers=headers,
             workers_count=workers_count,
             max_size=max_size,
+            calculate_content_sha256=calculate_content_sha256,
         )
 
     async def put_multipart(
         self,
         object_name: t.Union[str, Path],
-        data: t.AsyncIterable[bytes],
+        data: t.Iterable[bytes],
         *,
         headers: LooseHeaders = None,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
         part_upload_tries: int = 3,
+        calculate_content_sha256: bool = True,
     ):
         if workers_count < 1:
             raise ValueError(
@@ -354,12 +367,17 @@ class S3Client:
             for _ in range(workers_count)
         ]
 
-        async for part in data:
+        if calculate_content_sha256:
+            gen = gen_with_hash(data)
+        else:
+            gen = gen_without_hash(data)
+
+        async for part_hash, part in gen:
             log.debug(
                 "Sending part %d (%d bytes) of upload %s to %s",
                 part_no, len(part), upload_id, object_name,
             )
-            await parts_queue.put((part_no, part))
+            await parts_queue.put((part_no, part_hash, part))
             part_no += 1
 
         for _ in range(workers_count):
