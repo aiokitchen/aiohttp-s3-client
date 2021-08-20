@@ -40,7 +40,7 @@ setup(
     ],
     packages=find_packages(exclude=["tests"]),
     install_requires=[
-        "aiomisc~=14.4", "aiohttp<4", "aws-request-signer==1.0.0", "lxml",
+        "aiomisc~=14.4", "aiohttp<4", "aws-request-signer==1.0.0",
     ],
     python_requires=">3.6.*, <4",
     extras_require={

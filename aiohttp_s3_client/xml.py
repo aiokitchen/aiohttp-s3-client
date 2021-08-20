@@ -1,11 +1,16 @@
 from typing import List, Tuple
 
-from lxml import etree as ET
+from xml.etree import ElementTree as ET
 
 
 def parse_create_multipart_upload_id(payload: bytes) -> str:
     root = ET.fromstring(payload)
-    return next(root.iter("{*}UploadId")).text
+    uploadid_el = root.find(
+        "{http://s3.amazonaws.com/doc/2006-03-01/}UploadId"
+    )
+    if not uploadid_el:
+        uploadid_el = root.find("UploadId")
+    return uploadid_el.text
 
 
 def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
