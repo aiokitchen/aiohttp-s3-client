@@ -44,7 +44,6 @@ jobs:
 
       matrix:
         toxenv:
-          - py36
           - py37
           - py38
           - py39
