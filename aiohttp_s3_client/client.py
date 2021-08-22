@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
-from aiohttp.client import ClientResponse
+from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
 from aiohttp.typedefs import LooseHeaders
 from aiomisc import asyncbackoff, threaded_iterable
@@ -35,7 +35,15 @@ PART_SIZE = 5 * 1024 * 1024  # 5MB
 threaded_iterable_constrained = threaded_iterable(max_size=2)
 
 
-class AwsUploadFailed(ClientError):
+class AwsError(ClientError):
+    pass
+
+
+class AwsUploadError(AwsError):
+    pass
+
+
+class AwsNotFoundError(AwsError):
     pass
 
 
@@ -105,7 +113,7 @@ class S3Client:
     def url(self):
         return self._url
 
-    async def request(
+    def request(
         self, method: str, path: str,
         headers: LooseHeaders = None,
         params: ParamsType = None,
@@ -113,7 +121,7 @@ class S3Client:
         data_length: t.Optional[int] = None,
         content_sha256: str = None,
         **kwargs,
-    ) -> ClientResponse:
+    ) -> RequestContextManager:
         if isinstance(data, bytes):
             data_length = len(data)
         elif isinstance(data, str):
@@ -138,28 +146,28 @@ class S3Client:
                 method, str(url), headers=headers, content_hash=content_sha256,
             ),
         )
-        return await self._session.request(
+        return self._session.request(
             method, url, headers=headers, data=data, **kwargs,
         )
 
-    async def get(self, object_name: str, **kwargs) -> ClientResponse:
-        return await self.request("GET", object_name, **kwargs)
+    def get(self, object_name: str, **kwargs) -> RequestContextManager:
+        return self.request("GET", object_name, **kwargs)
 
-    async def head(
+    def head(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs,
-    ) -> ClientResponse:
-        return await self.request(
+    ) -> RequestContextManager:
+        return self.request(
             "HEAD", object_name, content_sha256=content_sha256, **kwargs,
         )
 
-    async def delete(
+    def delete(
         self, object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs,
-    ) -> ClientResponse:
-        return await self.request(
+    ) -> RequestContextManager:
+        return self.request(
             "DELETE", object_name, content_sha256=content_sha256, **kwargs,
         )
 
@@ -186,7 +194,7 @@ class S3Client:
     def put(
         self, object_name: str,
         data: t.Union[bytes, str, t.AsyncIterable[bytes]], **kwargs,
-    ):
+    ) -> RequestContextManager:
         return self.request("PUT", object_name, data=data, **kwargs)
 
     def post(
@@ -201,7 +209,7 @@ class S3Client:
         file_path: t.Union[str, Path],
         *, headers: LooseHeaders = None,
         chunk_size: int = CHUNK_SIZE, content_sha256: str = None,
-    ):
+    ) -> RequestContextManager:
 
         headers = self._prepare_headers(headers, str(file_path))
         return self.put(
@@ -217,26 +225,26 @@ class S3Client:
 
     @asyncbackoff(
         None, None, 0,
-        max_tries=3, exceptions=(AwsUploadFailed, ClientError),
+        max_tries=3, exceptions=(ClientError,),
     )
     async def _create_multipart_upload(
         self,
         object_name: str,
         headers: LooseHeaders = None,
     ) -> str:
-        resp = await self.post(
+        async with self.post(
             object_name,
             headers=headers,
             params={"uploads": 1},
             content_sha256=EMPTY_STR_HASH,
-        )
-        payload = await resp.read()
-        if resp.status != HTTPStatus.OK:
-            raise AwsUploadFailed(
-                f"Wrong status code {resp.status} from s3 with message "
-                f"{payload.decode()}.",
-            )
-        return parse_create_multipart_upload_id(payload)
+        ) as resp:
+            payload = await resp.read()
+            if resp.status != HTTPStatus.OK:
+                raise AwsUploadError(
+                    f"Wrong status code {resp.status} from s3 with message "
+                    f"{payload.decode()}.",
+                )
+            return parse_create_multipart_upload_id(payload)
 
     async def _put_part(
         self,
@@ -247,24 +255,24 @@ class S3Client:
         content_sha256: str,
         **kwargs,
     ) -> str:
-        resp = await self.put(
+        async with self.put(
             object_name,
             params={"partNumber": part_no, "uploadId": upload_id},
             data=data,
             content_sha256=content_sha256,
             **kwargs,
-        )
-        payload = await resp.text()
-        if resp.status != HTTPStatus.OK:
-            raise AwsUploadFailed(
-                f"Wrong status code {resp.status} from s3 with message "
-                f"{payload}.",
-            )
-        return resp.headers["Etag"].strip('"')
+        ) as resp:
+            payload = await resp.text()
+            if resp.status != HTTPStatus.OK:
+                raise AwsUploadError(
+                    f"Wrong status code {resp.status} from s3 with message "
+                    f"{payload}.",
+                )
+            return resp.headers["Etag"].strip('"')
 
     @asyncbackoff(
         None, None, 0,
-        max_tries=3, exceptions=(AwsUploadFailed, ClientError),
+        max_tries=3, exceptions=(AwsUploadError, ClientError),
     )
     async def _complete_multipart_upload(
         self,
@@ -273,19 +281,19 @@ class S3Client:
         parts: t.List[t.Tuple[int, str]],
     ):
         complete_upload_request = create_complete_upload_request(parts)
-        resp = await self.post(
+        async with self.post(
             object_name,
             headers={"Content-Type": "text/xml"},
             params={"uploadId": upload_id},
             data=complete_upload_request,
             content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
-        )
-        if resp.status != HTTPStatus.OK:
-            payload = await resp.text()
-            raise AwsUploadFailed(
-                f"Wrong status code {resp.status} from s3 with message "
-                f"{payload}.",
-            )
+        ) as resp:
+            if resp.status != HTTPStatus.OK:
+                payload = await resp.text()
+                raise AwsUploadError(
+                    f"Wrong status code {resp.status} from s3 with message "
+                    f"{payload}.",
+                )
 
     async def _part_uploader(
         self,
@@ -299,7 +307,7 @@ class S3Client:
         backoff = asyncbackoff(
             None, None,
             max_tries=part_upload_tries,
-            exceptions=(AwsUploadFailed, ClientError),
+            exceptions=(ClientError,),
         )
         while True:
             msg = await parts_queue.get()
