@@ -33,16 +33,17 @@ jobs:
 
     services:
       s3:
-        image: docker://fingershock/fakes3
+        image: docker://adobe/s3mock
         ports:
-          - 8000:8000
+          - 9090:9090
+        env:
+          initialBuckets: test
 
     strategy:
       fail-fast: false
 
       matrix:
         toxenv:
-          - py36
           - py37
           - py38
           - py39
@@ -55,6 +56,6 @@ jobs:
         env:
           TOXENV: ${{ matrix.toxenv }}
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
-          S3_URL: http://user:hackme@s3:8000/
+          S3_URL: http://user:hackme@s3:9090/test/
         with:
           args: tox
