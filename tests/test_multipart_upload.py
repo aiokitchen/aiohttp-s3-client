@@ -1,6 +1,12 @@
 import pytest
+from aiohttp import ClientSession
 
 from aiohttp_s3_client import S3Client
+
+
+def iterable():
+    for _ in range(8):  # type: int
+        yield b"hello world" * 1024
 
 
 async def test_multipart_file_upload(s3_client: S3Client, s3_read, tmp_path):
@@ -25,11 +31,6 @@ async def test_multipart_stream_upload(
     calculate_content_sha256, workers_count,
     s3_client: S3Client, s3_read, tmp_path,
 ):
-
-    def iterable():
-        for _ in range(8):  # type: int
-            yield b"hello world" * 1024
-
     await s3_client.put_multipart(
         "/test/test",
         iterable(),
@@ -38,3 +39,41 @@ async def test_multipart_stream_upload(
     )
 
     assert (await s3_read("/test/test")) == b"hello world" * 1024 * 8
+
+
+async def test_multipart_hooks(
+    s3_url, s3_read, tmp_path,
+):
+
+    parts_uploaded = 0
+    workers_started = 0
+
+    async def on_multipart_worker_start(ctx):
+        nonlocal workers_started
+        workers_started += 1
+        return {}
+
+    async def on_part_upload(ctx):
+        nonlocal parts_uploaded
+        parts_uploaded += 1
+        return {}
+
+    async with ClientSession(
+        raise_for_status=False, auto_decompress=False,
+    ) as session:
+        s3_client = S3Client(
+            url=s3_url,
+            region="us-east-1",
+            session=session,
+            on_part_upload=on_part_upload,
+            on_multipart_worker_start=on_multipart_worker_start,
+        )
+        await s3_client.put_multipart(
+            "/test/test",
+            iterable(),
+            workers_count=4,
+        )
+
+    assert (await s3_read("/test/test")) == b"hello world" * 1024 * 8
+    assert parts_uploaded == 8
+    assert workers_started == 4

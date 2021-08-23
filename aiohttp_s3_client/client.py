@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import typing as t
+from argparse import Namespace
 from collections import deque
 from http import HTTPStatus
 from mimetypes import guess_type
@@ -21,6 +22,9 @@ from yarl import URL
 from aiohttp_s3_client.xml import (
     create_complete_upload_request, parse_create_multipart_upload_id,
 )
+
+
+CallbackType = t.Callable[[Namespace], t.Awaitable]
 
 
 log = logging.getLogger(__name__)
@@ -83,10 +87,13 @@ ParamsType = t.Optional[t.Mapping[str, str]]
 
 class S3Client:
     def __init__(
-        self, session: ClientSession, url: URL,
+        self,
+        session: ClientSession, url: URL,
         secret_access_key: str = None,
         access_key_id: str = None,
         region: str = "",
+        on_part_upload: t.Optional[CallbackType] = None,
+        on_multipart_worker_start: t.Optional[CallbackType] = None,
     ):
         access_key_id = access_key_id or url.user
         secret_access_key = secret_access_key or url.password
@@ -108,6 +115,8 @@ class S3Client:
             region=region, service="s3", access_key_id=access_key_id,
             secret_access_key=secret_access_key,
         )
+        self._on_part_upload = on_part_upload
+        self._on_multipart_worker_start = on_multipart_worker_start
 
     @property
     def url(self):
@@ -246,6 +255,15 @@ class S3Client:
                 )
             return parse_create_multipart_upload_id(payload)
 
+    async def _prepare_and_put_part(self, ctx: Namespace, **kwargs) -> str:
+        if self._on_part_upload:
+            options = await self._on_part_upload(ctx)
+            log.debug("Kwargs update from hook %r", options)
+            kwargs.update(options)
+        if ctx.is_first_try:
+            ctx.is_first_try = False
+        return await self._put_part(**kwargs)
+
     async def _put_part(
         self,
         upload_id: str,
@@ -269,6 +287,46 @@ class S3Client:
                     f"{payload}.",
                 )
             return resp.headers["Etag"].strip('"')
+
+    async def _part_uploader(
+        self,
+        upload_id: str,
+        object_name: str,
+        parts_queue: asyncio.Queue,
+        results_queue: deque,
+        part_upload_tries: int,
+        **kwargs,
+    ):
+        backoff = asyncbackoff(
+            None, None,
+            max_tries=part_upload_tries,
+            exceptions=(ClientError,),
+        )
+
+        ctx = Namespace()
+        if self._on_multipart_worker_start is not None:
+            await self._on_multipart_worker_start(ctx)
+
+        while True:
+            msg = await parts_queue.get()
+            if msg is DONE:
+                break
+
+            ctx.is_first_try = True
+            part_no, part_hash, part = msg
+            etag = await backoff(self._prepare_and_put_part)(  # type: ignore
+                ctx=ctx,
+                upload_id=upload_id,
+                object_name=object_name,
+                part_no=part_no,
+                data=part,
+                content_sha256=part_hash,
+                **kwargs,
+            )
+            log.debug(
+                "Etag for part %d of %s is %s", part_no, upload_id, etag,
+            )
+            results_queue.append((part_no, etag))
 
     @asyncbackoff(
         None, None, 0,
@@ -294,38 +352,6 @@ class S3Client:
                     f"Wrong status code {resp.status} from s3 with message "
                     f"{payload}.",
                 )
-
-    async def _part_uploader(
-        self,
-        upload_id: str,
-        object_name: str,
-        parts_queue: asyncio.Queue,
-        results_queue: deque,
-        part_upload_tries: int,
-        **kwargs,
-    ):
-        backoff = asyncbackoff(
-            None, None,
-            max_tries=part_upload_tries,
-            exceptions=(ClientError,),
-        )
-        while True:
-            msg = await parts_queue.get()
-            if msg is DONE:
-                break
-            part_no, part_hash, part = msg
-            etag = await backoff(self._put_part)(  # type: ignore
-                upload_id=upload_id,
-                object_name=object_name,
-                part_no=part_no,
-                data=part,
-                content_sha256=part_hash,
-                **kwargs,
-            )
-            log.debug(
-                "Etag for part %d of %s is %s", part_no, upload_id, etag,
-            )
-            results_queue.append((part_no, etag))
 
     async def put_file_multipart(
         self,
