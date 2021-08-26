@@ -523,11 +523,10 @@ class S3Client:
         pos = req_range_start
         async with self.get(object_name, headers=headers, **kwargs) as resp:
             if resp.status not in (HTTPStatus.PARTIAL_CONTENT, HTTPStatus.OK):
+                payload = await resp.text()
                 raise AwsDownloadError(
-                    "Got wrong status code %d on range download of %s %s",
-                    resp.status,
-                    object_name,
-                    await resp.text(),
+                    f"Got wrong status code {resp.status} on range download "
+                    f"of {object_name}: {payload}",
                 )
             while True:
                 chunk = await resp.content.read(buffer_size)
@@ -595,6 +594,19 @@ class S3Client:
         buffer_size: int = PAGESIZE * 32,
         **kwargs,
     ):
+        """
+        Download object in parallel with requests with Range.
+        If file will change while download is in progress -
+            error will be raised.
+
+        object_name: s3 key to download
+        file_path: target file path
+        headers: additional headers
+        range_step: how much data will be downloaded in single HTTP request
+        workers_count: count of parallel workers
+        range_get_tries: count of tries to download each range
+        buffer_size: size of a buffer for on the fly data
+        """
         file_path = Path(file_path)
         async with self.head(str(object_name)) as resp:
             if resp.status != HTTPStatus.OK:
@@ -602,7 +614,7 @@ class S3Client:
                     f"Got response for HEAD request for {object_name}"
                     f"of a wrong status {resp.status}",
                 )
-            etag = resp.headers["Etag"]
+            etag = resp.headers["Etag"].strip('"')
             file_size = int(resp.headers["Content-Length"])
             log.debug(
                 "Object's %s etag is %s and size is %d",
