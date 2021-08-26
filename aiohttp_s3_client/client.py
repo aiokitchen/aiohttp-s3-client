@@ -1,15 +1,14 @@
 import asyncio
 import hashlib
+import io
 import logging
 import os
 import typing as t
-import io
-import shutil
 from collections import deque
 from functools import partial
 from http import HTTPStatus
-from mmap import PAGESIZE
 from mimetypes import guess_type
+from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
@@ -18,7 +17,7 @@ from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
 from aiohttp.typedefs import LooseHeaders
-from aiomisc import asyncbackoff, threaded_iterable, threaded
+from aiomisc import asyncbackoff, threaded, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
 from multidict import CIMultiDict
 from yarl import URL
@@ -53,12 +52,14 @@ class AwsDownloadError(AwsError):
 
 
 @threaded
-def concat_files(target_file: Path, files: t.List[NamedTemporaryFile]):
+def concat_files(
+    target_file: Path, files: t.List[NamedTemporaryFile], buffer_size: int,
+):
     with target_file.open("w+b") as fp:
         for file in files:
             file.seek(0)
             while True:
-                chunk = file.read(PAGESIZE * 32)
+                chunk = file.read(buffer_size)
                 if not chunk:
                     break
                 fp.write(chunk)
@@ -500,6 +501,7 @@ class S3Client:
         range_start: int,
         req_range_start: int,
         req_range_end: int,
+        buffer_size: int,
         headers: LooseHeaders = None,
         **kwargs,
     ):
@@ -526,7 +528,7 @@ class S3Client:
                     await resp.text(),
                 )
             while True:
-                chunk = await resp.content.read(PAGESIZE * 32)
+                chunk = await resp.content.read(buffer_size)
                 if not chunk:
                     break
                 await writer(chunk, range_start, req_range_start, pos)
@@ -541,6 +543,7 @@ class S3Client:
         range_step: int,
         range_start: int,
         range_end: int,
+        buffer_size: int,
         range_get_tries: int = 3,
         headers: LooseHeaders = None,
         **kwargs,
@@ -573,6 +576,7 @@ class S3Client:
                 range_start=range_start,
                 req_range_start=req_range_start,
                 req_range_end=req_range_end - 1,
+                buffer_size=buffer_size,
                 headers=headers,
                 **kwargs,
             )
@@ -586,14 +590,15 @@ class S3Client:
         range_step: int = PART_SIZE,
         workers_count: int = 1,
         range_get_tries: int = 3,
+        buffer_size: int = PAGESIZE * 32,
         **kwargs,
     ):
         file_path = Path(file_path)
         async with self.head(str(object_name)) as resp:
             if resp.status != HTTPStatus.OK:
                 raise AwsDownloadError(
-                    f"Got response for HEAD request for {object_name} of a wrong "
-                    f"status {resp.status}"
+                    f"Got response for HEAD request for {object_name}"
+                    f"of a wrong status {resp.status}",
                 )
             etag = resp.headers["Etag"]
             file_size = int(resp.headers["Content-Length"])
@@ -606,7 +611,7 @@ class S3Client:
 
         workers = []
         files = []
-        worker_range_size = file_size //  workers_count
+        worker_range_size = file_size // workers_count
         range_end = 0
         with file_path.open("w+b") as fp:
             for range_start in range(0, file_size, worker_range_size):
@@ -628,12 +633,15 @@ class S3Client:
                         range_start=range_start,
                         range_end=range_end,
                         range_get_tries=range_get_tries,
+                        buffer_size=buffer_size,
                         **kwargs,
-                    )
+                    ),
                 )
 
             await asyncio.gather(*workers)
 
         if files:
             log.debug("Joining %d parts to %s", len(files), file_path)
-            await concat_files(file_path, files)
+            await concat_files(
+                file_path, files, buffer_size=buffer_size,
+            )
