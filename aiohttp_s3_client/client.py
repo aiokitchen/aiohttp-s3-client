@@ -16,10 +16,9 @@ from urllib.parse import quote
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
-from aiohttp.typedefs import CIMultiDict, CIMultiDictProxy
 from aiomisc import asyncbackoff, threaded, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
-from multidict import CIMultiDict
+from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from aiohttp_s3_client.xml import (
