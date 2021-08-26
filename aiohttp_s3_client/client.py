@@ -16,7 +16,7 @@ from urllib.parse import quote
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
-from aiohttp.typedefs import LooseHeaders
+from aiohttp.typedefs import CIMultiDict, CIMultiDictProxy
 from aiomisc import asyncbackoff, threaded, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
 from multidict import CIMultiDict
@@ -34,6 +34,8 @@ CHUNK_SIZE = 2 ** 16
 DONE = object()
 EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
+
+HeadersType = t.Union[t.Dict, CIMultiDict, CIMultiDictProxy]
 
 
 threaded_iterable_constrained = threaded_iterable(max_size=2)
@@ -53,7 +55,7 @@ class AwsDownloadError(AwsError):
 
 @threaded
 def concat_files(
-    target_file: Path, files: t.List[NamedTemporaryFile], buffer_size: int,
+    target_file: Path, files: t.List[io.BytesIO], buffer_size: int,
 ):
     with target_file.open("w+b") as fp:
         for file in files:
@@ -68,8 +70,7 @@ def concat_files(
 
 @threaded
 def write_from_start(
-    file: io.BytesIO, chunk: bytes,
-    range_start: int, req_range_start: int, pos: int,
+    file: io.BytesIO, chunk: bytes, range_start: int, pos: int,
 ):
     file.seek(pos - range_start)
     file.write(chunk)
@@ -77,7 +78,7 @@ def write_from_start(
 
 @threaded
 def pwrite_absolute_pos(
-    fd: int, chunk: bytes, range_start, req_range_start: int, pos: int,
+    fd: int, chunk: bytes, range_start: int, pos: int,
 ):
     os.pwrite(fd, chunk, pos)
 
@@ -150,7 +151,7 @@ class S3Client:
 
     def request(
         self, method: str, path: str,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         params: ParamsType = None,
         data: t.Optional[DataType] = None,
         data_length: t.Optional[int] = None,
@@ -207,12 +208,12 @@ class S3Client:
         )
 
     @staticmethod
-    def _make_headers(headers: t.Optional[LooseHeaders]) -> CIMultiDict:
+    def _make_headers(headers: t.Optional[HeadersType]) -> CIMultiDict:
         headers = CIMultiDict(headers or {})
         return headers
 
     def _prepare_headers(
-        self, headers: t.Optional[LooseHeaders],
+        self, headers: t.Optional[HeadersType],
         file_path: str = "",
     ) -> CIMultiDict:
         headers = self._make_headers(headers)
@@ -242,7 +243,7 @@ class S3Client:
     def put_file(
         self, object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
-        *, headers: LooseHeaders = None,
+        *, headers: HeadersType = None,
         chunk_size: int = CHUNK_SIZE, content_sha256: str = None,
     ) -> RequestContextManager:
 
@@ -265,7 +266,7 @@ class S3Client:
     async def _create_multipart_upload(
         self,
         object_name: str,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
     ) -> str:
         async with self.post(
             object_name,
@@ -367,7 +368,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
         *,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         part_size: int = PART_SIZE,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
@@ -412,7 +413,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         data: t.Iterable[bytes],
         *,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
         part_upload_tries: int = 3,
@@ -494,7 +495,7 @@ class S3Client:
     async def _download_range(
         self,
         object_name: str,
-        writer: t.Callable[[bytes, int], t.Coroutine],
+        writer: t.Callable[[bytes, int, int], t.Coroutine],
         *,
         etag: str,
         pos: int,
@@ -502,7 +503,7 @@ class S3Client:
         req_range_start: int,
         req_range_end: int,
         buffer_size: int,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         **kwargs,
     ):
         """
@@ -514,7 +515,9 @@ class S3Client:
             req_range_start,
             req_range_end,
         )
-        headers = (headers or {}).copy()
+        if not headers:
+            headers = {}
+        headers = headers.copy()
         headers["Range"] = f"bytes={req_range_start}-{req_range_end}"
         headers["If-Match"] = etag
 
@@ -531,13 +534,13 @@ class S3Client:
                 chunk = await resp.content.read(buffer_size)
                 if not chunk:
                     break
-                await writer(chunk, range_start, req_range_start, pos)
+                await writer(chunk, range_start, pos)
                 pos += len(chunk)
 
     async def _download_worker(
         self,
         object_name: str,
-        writer: t.Callable[[bytes, int], t.Coroutine],
+        writer: t.Callable[[bytes, int, int], t.Coroutine],
         *,
         etag: str,
         range_step: int,
@@ -545,7 +548,7 @@ class S3Client:
         range_end: int,
         buffer_size: int,
         range_get_tries: int = 3,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         **kwargs,
     ):
         """
@@ -569,7 +572,7 @@ class S3Client:
             if req_range_end > range_end:
                 req_range_end = range_end
             await backoff(self._download_range)(  # type: ignore
-                object_name,
+                object_name,  # type: ignore
                 writer,
                 etag=etag,
                 pos=(req_range_start - range_start),
@@ -586,7 +589,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
         *,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         range_step: int = PART_SIZE,
         workers_count: int = 1,
         range_get_tries: int = 3,
@@ -627,7 +630,7 @@ class S3Client:
                 workers.append(
                     self._download_worker(
                         str(object_name),
-                        writer,
+                        writer,  # type: ignore
                         etag=etag,
                         range_step=range_step,
                         range_start=range_start,
