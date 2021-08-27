@@ -111,7 +111,7 @@ which will be concatenated after downloading.
 
 ```python
 client = S3Client()
-await client.put_file_multipart(
+await client.get_file_parallel(
     "dump/bigfile.csv",
     "/home/user/bigfile.csv",
     workers_count=8,
