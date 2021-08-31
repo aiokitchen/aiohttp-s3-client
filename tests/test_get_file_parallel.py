@@ -1,4 +1,5 @@
 import asyncio
+import os
 import secrets
 
 import pytest
@@ -72,3 +73,4 @@ async def test_get_file_that_changed_in_process_error(
     assert err.value.args[0].startswith(
         "Got wrong status code 412 on range download of test/test",
     )
+    assert not os.path.exists(tmpdir / "temp.dat")
