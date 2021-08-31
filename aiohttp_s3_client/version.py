@@ -1,4 +1,8 @@
-author_info = (("Dmitry Orlov", "me@mosquito.su"),)
+author_info = (
+    ("Dmitry Orlov", "me@mosquito.su"),
+    ("Yuri Shikanov", "dizballanze@gmail.com"),
+    ("Alexander Vasin", "hi@alvass.in"),
+)
 
 package_info = (
     "The simple module for putting and getting object from Amazon S3 "
@@ -9,7 +13,7 @@ package_license = "Apache Software License"
 
 team_email = "me@mosquito.su"
 
-version_info = (0, 5, 2)
+version_info = (0, 5, 3)
 
 __author__ = ", ".join("{} <{}>".format(*info) for info in author_info)
 __version__ = ".".join(map(str, version_info))

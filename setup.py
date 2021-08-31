@@ -5,7 +5,7 @@ from setuptools import find_packages, setup
 
 module = SourceFileLoader(
     "version", os.path.join("aiohttp_s3_client", "version.py")
-).load_module()
+).load_module("version")
 
 
 setup(
@@ -55,6 +55,6 @@ setup(
         ],
     },
     project_urls={
-        "Source": "https://github.com/mosquito/aiohttp-s3-client",
+        "Source": "https://github.com/aiokitchen/aiohttp-s3-client",
     },
 )
