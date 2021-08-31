@@ -22,12 +22,6 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Resetting git to master
-        run: git reset --hard master
-
-      - name: Resetting git to master
-        run: git fetch --unshallow --tags || true
-
       - name: Install requires
         run: python3 -m pip install twine wheel
 
