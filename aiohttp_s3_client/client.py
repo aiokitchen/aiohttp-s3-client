@@ -5,6 +5,7 @@ import logging
 import os
 import typing as t
 from collections import deque
+from contextlib import suppress
 from functools import partial
 from http import HTTPStatus
 from mimetypes import guess_type
@@ -56,7 +57,7 @@ class AwsDownloadError(AwsError):
 def concat_files(
     target_file: Path, files: t.List[io.BytesIO], buffer_size: int,
 ):
-    with target_file.open("w+b") as fp:
+    with target_file.open("ab") as fp:
         for file in files:
             file.seek(0)
             while True:
@@ -627,35 +628,48 @@ class S3Client:
         files = []
         worker_range_size = file_size // workers_count
         range_end = 0
-        with file_path.open("w+b") as fp:
-            for range_start in range(0, file_size, worker_range_size):
-                range_end += worker_range_size
-                if range_end > file_size:
-                    range_end = file_size
-                if hasattr(os, "pwrite"):
-                    writer = partial(pwrite_absolute_pos, fp.fileno())
-                else:
-                    file = NamedTemporaryFile(dir=file_path.parent)
-                    files.append(file)
-                    writer = partial(write_from_start, file)
-                workers.append(
-                    self._download_worker(
-                        str(object_name),
-                        writer,  # type: ignore
-                        etag=etag,
-                        range_step=range_step,
-                        range_start=range_start,
-                        range_end=range_end,
-                        range_get_tries=range_get_tries,
-                        buffer_size=buffer_size,
-                        **kwargs,
-                    ),
+        try:
+            with file_path.open("w+b") as fp:
+                for range_start in range(0, file_size, worker_range_size):
+                    range_end += worker_range_size
+                    if range_end > file_size:
+                        range_end = file_size
+                    if hasattr(os, "pwrite"):
+                        writer = partial(pwrite_absolute_pos, fp.fileno())
+                    else:
+                        if range_start:
+                            file = NamedTemporaryFile(dir=file_path.parent)
+                            files.append(file)
+                        else:
+                            file = fp
+                        writer = partial(write_from_start, file)
+                    workers.append(
+                        self._download_worker(
+                            str(object_name),
+                            writer,  # type: ignore
+                            etag=etag,
+                            range_step=range_step,
+                            range_start=range_start,
+                            range_end=range_end,
+                            range_get_tries=range_get_tries,
+                            buffer_size=buffer_size,
+                            **kwargs,
+                        ),
+                    )
+
+                await asyncio.gather(*workers)
+
+            if files:
+                # First part already in `file_path`
+                log.debug("Joining %d parts to %s", len(files) + 1, file_path)
+                await concat_files(
+                    file_path, files, buffer_size=buffer_size,
                 )
-
-            await asyncio.gather(*workers)
-
-        if files:
-            log.debug("Joining %d parts to %s", len(files), file_path)
-            await concat_files(
-                file_path, files, buffer_size=buffer_size,
+        except Exception:
+            log.exception(
+                "Error on file download. Removing possibly incomplete file %s",
+                file_path,
             )
+            with suppress(FileNotFoundError):
+                os.unlink(file_path)
+            raise
