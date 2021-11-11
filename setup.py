@@ -5,8 +5,10 @@ from setuptools import find_packages, setup
 
 module = SourceFileLoader(
     "version", os.path.join("aiohttp_s3_client", "version.py")
-).load_module()
+).load_module("version")
 
+packages = find_packages(exclude=["tests"])
+package_data = {package: ['py.typed'] for package in packages}
 
 setup(
     name="aiohttp-s3-client",
@@ -37,9 +39,10 @@ setup(
         "Programming Language :: Python :: Implementation :: PyPy",
         "Programming Language :: Python :: Implementation :: CPython",
     ],
-    packages=find_packages(exclude=["tests"]),
+    packages=packages,
+    package_data=package_data,
     install_requires=[
-        "aiomisc~=14.4", "aiohttp<4", "aws-request-signer==1.0.0",
+        "aiomisc<16,>=14", "aiohttp<4", "aws-request-signer==1.0.0",
     ],
     python_requires=">3.7.*, <4",
     extras_require={
@@ -55,6 +58,6 @@ setup(
         ],
     },
     project_urls={
-        "Source": "https://github.com/mosquito/aiohttp-s3-client",
+        "Source": "https://github.com/aiokitchen/aiohttp-s3-client",
     },
 )

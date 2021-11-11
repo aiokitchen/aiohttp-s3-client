@@ -86,6 +86,7 @@ client = S3Client(url="http://key_id:access_key@your-s3-host", ...)
 For uploading large files [multipart uploading](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html)
 can be used. It allows you to asynchronously upload multiple parts of a file
 to S3.
+S3Client handles retries of part uploads and calculates part hash for integrity checks.
 
 ```python
 client = S3Client()
@@ -94,6 +95,25 @@ await client.put_file_multipart(
     headers={
     	"Content-Type": "text/csv",
     },
+    workers_count=8,
+)
+```
+
+## Parallel download to file
+
+S3 supports `GET` requests with `Range` header. It's possible to download
+objects in parallel with multiple connections for speedup.
+S3Client handles retries of partial requests and makes sure that file won't
+changed during download with `ETag` header.
+If your system supports `pwrite` syscall (linux, macos, etc) it will be used to
+write simultaneously to a single file. Otherwise, each worker will have own file
+which will be concatenated after downloading.
+
+```python
+client = S3Client()
+await client.get_file_parallel(
+    "dump/bigfile.csv",
+    "/home/user/bigfile.csv",
     workers_count=8,
 )
 ```

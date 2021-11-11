@@ -1,21 +1,25 @@
 import asyncio
 import hashlib
+import io
 import logging
 import os
 import typing as t
 from collections import deque
+from contextlib import suppress
+from functools import partial
 from http import HTTPStatus
 from mimetypes import guess_type
+from mmap import PAGESIZE
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
-from aiohttp.typedefs import LooseHeaders
-from aiomisc import asyncbackoff, threaded_iterable
+from aiomisc import asyncbackoff, threaded, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
-from multidict import CIMultiDict
+from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from aiohttp_s3_client.xml import (
@@ -31,6 +35,8 @@ DONE = object()
 EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
 
+HeadersType = t.Union[t.Dict, CIMultiDict, CIMultiDictProxy]
+
 
 threaded_iterable_constrained = threaded_iterable(max_size=2)
 
@@ -43,8 +49,38 @@ class AwsUploadError(AwsError):
     pass
 
 
-class AwsNotFoundError(AwsError):
+class AwsDownloadError(AwsError):
     pass
+
+
+@threaded
+def concat_files(
+    target_file: Path, files: t.List[io.BytesIO], buffer_size: int,
+):
+    with target_file.open("ab") as fp:
+        for file in files:
+            file.seek(0)
+            while True:
+                chunk = file.read(buffer_size)
+                if not chunk:
+                    break
+                fp.write(chunk)
+            file.close()
+
+
+@threaded
+def write_from_start(
+    file: io.BytesIO, chunk: bytes, range_start: int, pos: int,
+):
+    file.seek(pos - range_start)
+    file.write(chunk)
+
+
+@threaded
+def pwrite_absolute_pos(
+    fd: int, chunk: bytes, range_start: int, pos: int,
+):
+    os.pwrite(fd, chunk, pos)
 
 
 @threaded_iterable_constrained
@@ -115,7 +151,7 @@ class S3Client:
 
     def request(
         self, method: str, path: str,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         params: ParamsType = None,
         data: t.Optional[DataType] = None,
         data_length: t.Optional[int] = None,
@@ -172,12 +208,12 @@ class S3Client:
         )
 
     @staticmethod
-    def _make_headers(headers: t.Optional[LooseHeaders]) -> CIMultiDict:
+    def _make_headers(headers: t.Optional[HeadersType]) -> CIMultiDict:
         headers = CIMultiDict(headers or {})
         return headers
 
     def _prepare_headers(
-        self, headers: t.Optional[LooseHeaders],
+        self, headers: t.Optional[HeadersType],
         file_path: str = "",
     ) -> CIMultiDict:
         headers = self._make_headers(headers)
@@ -207,7 +243,7 @@ class S3Client:
     def put_file(
         self, object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
-        *, headers: LooseHeaders = None,
+        *, headers: HeadersType = None,
         chunk_size: int = CHUNK_SIZE, content_sha256: str = None,
     ) -> RequestContextManager:
 
@@ -230,7 +266,7 @@ class S3Client:
     async def _create_multipart_upload(
         self,
         object_name: str,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
     ) -> str:
         async with self.post(
             object_name,
@@ -245,30 +281,6 @@ class S3Client:
                     f"{payload.decode()}.",
                 )
             return parse_create_multipart_upload_id(payload)
-
-    async def _put_part(
-        self,
-        upload_id: str,
-        object_name: str,
-        part_no: int,
-        data: bytes,
-        content_sha256: str,
-        **kwargs,
-    ) -> str:
-        async with self.put(
-            object_name,
-            params={"partNumber": part_no, "uploadId": upload_id},
-            data=data,
-            content_sha256=content_sha256,
-            **kwargs,
-        ) as resp:
-            payload = await resp.text()
-            if resp.status != HTTPStatus.OK:
-                raise AwsUploadError(
-                    f"Wrong status code {resp.status} from s3 with message "
-                    f"{payload}.",
-                )
-            return resp.headers["Etag"].strip('"')
 
     @asyncbackoff(
         None, None, 0,
@@ -294,6 +306,30 @@ class S3Client:
                     f"Wrong status code {resp.status} from s3 with message "
                     f"{payload}.",
                 )
+
+    async def _put_part(
+        self,
+        upload_id: str,
+        object_name: str,
+        part_no: int,
+        data: bytes,
+        content_sha256: str,
+        **kwargs,
+    ) -> str:
+        async with self.put(
+            object_name,
+            params={"partNumber": part_no, "uploadId": upload_id},
+            data=data,
+            content_sha256=content_sha256,
+            **kwargs,
+        ) as resp:
+            payload = await resp.text()
+            if resp.status != HTTPStatus.OK:
+                raise AwsUploadError(
+                    f"Wrong status code {resp.status} from s3 with message "
+                    f"{payload}.",
+                )
+            return resp.headers["Etag"].strip('"')
 
     async def _part_uploader(
         self,
@@ -332,7 +368,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
         *,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         part_size: int = PART_SIZE,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
@@ -377,7 +413,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         data: t.Iterable[bytes],
         *,
-        headers: LooseHeaders = None,
+        headers: HeadersType = None,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
         part_upload_tries: int = 3,
@@ -455,3 +491,185 @@ class S3Client:
         await self._complete_multipart_upload(  # type: ignore
             upload_id, object_name, parts,
         )
+
+    async def _download_range(
+        self,
+        object_name: str,
+        writer: t.Callable[[bytes, int, int], t.Coroutine],
+        *,
+        etag: str,
+        pos: int,
+        range_start: int,
+        req_range_start: int,
+        req_range_end: int,
+        buffer_size: int,
+        headers: HeadersType = None,
+        **kwargs,
+    ):
+        """
+        Downloading range [req_range_start:req_range_end] to `file`
+        """
+        log.debug(
+            "Downloading %s from %d to %d",
+            object_name,
+            req_range_start,
+            req_range_end,
+        )
+        if not headers:
+            headers = {}
+        headers = headers.copy()
+        headers["Range"] = f"bytes={req_range_start}-{req_range_end}"
+        headers["If-Match"] = etag
+
+        pos = req_range_start
+        async with self.get(object_name, headers=headers, **kwargs) as resp:
+            if resp.status not in (HTTPStatus.PARTIAL_CONTENT, HTTPStatus.OK):
+                payload = await resp.text()
+                raise AwsDownloadError(
+                    f"Got wrong status code {resp.status} on range download "
+                    f"of {object_name}: {payload}",
+                )
+            while True:
+                chunk = await resp.content.read(buffer_size)
+                if not chunk:
+                    break
+                await writer(chunk, range_start, pos)
+                pos += len(chunk)
+
+    async def _download_worker(
+        self,
+        object_name: str,
+        writer: t.Callable[[bytes, int, int], t.Coroutine],
+        *,
+        etag: str,
+        range_step: int,
+        range_start: int,
+        range_end: int,
+        buffer_size: int,
+        range_get_tries: int = 3,
+        headers: HeadersType = None,
+        **kwargs,
+    ):
+        """
+        Downloads data in range `[range_start, range_end)`
+        with step `range_step` to file `file_path`.
+        Uses `etag` to make sure that file wasn't changed in the process.
+        """
+        log.debug(
+            "Starting download worker for range [%d:%d]",
+            range_start,
+            range_end,
+        )
+        backoff = asyncbackoff(
+            None, None,
+            max_tries=range_get_tries,
+            exceptions=(ClientError,),
+        )
+        req_range_end = range_start
+        for req_range_start in range(range_start, range_end, range_step):
+            req_range_end += range_step
+            if req_range_end > range_end:
+                req_range_end = range_end
+            await backoff(self._download_range)(  # type: ignore
+                object_name,  # type: ignore
+                writer,
+                etag=etag,
+                pos=(req_range_start - range_start),
+                range_start=range_start,
+                req_range_start=req_range_start,
+                req_range_end=req_range_end - 1,
+                buffer_size=buffer_size,
+                headers=headers,
+                **kwargs,
+            )
+
+    async def get_file_parallel(
+        self,
+        object_name: t.Union[str, Path],
+        file_path: t.Union[str, Path],
+        *,
+        headers: HeadersType = None,
+        range_step: int = PART_SIZE,
+        workers_count: int = 1,
+        range_get_tries: int = 3,
+        buffer_size: int = PAGESIZE * 32,
+        **kwargs,
+    ):
+        """
+        Download object in parallel with requests with Range.
+        If file will change while download is in progress -
+            error will be raised.
+
+        object_name: s3 key to download
+        file_path: target file path
+        headers: additional headers
+        range_step: how much data will be downloaded in single HTTP request
+        workers_count: count of parallel workers
+        range_get_tries: count of tries to download each range
+        buffer_size: size of a buffer for on the fly data
+        """
+        file_path = Path(file_path)
+        async with self.head(str(object_name)) as resp:
+            if resp.status != HTTPStatus.OK:
+                raise AwsDownloadError(
+                    f"Got response for HEAD request for {object_name}"
+                    f"of a wrong status {resp.status}",
+                )
+            etag = resp.headers["Etag"].strip('"')
+            file_size = int(resp.headers["Content-Length"])
+            log.debug(
+                "Object's %s etag is %s and size is %d",
+                object_name,
+                etag,
+                file_size,
+            )
+
+        workers = []
+        files = []
+        worker_range_size = file_size // workers_count
+        range_end = 0
+        try:
+            with file_path.open("w+b") as fp:
+                for range_start in range(0, file_size, worker_range_size):
+                    range_end += worker_range_size
+                    if range_end > file_size:
+                        range_end = file_size
+                    if hasattr(os, "pwrite"):
+                        writer = partial(pwrite_absolute_pos, fp.fileno())
+                    else:
+                        if range_start:
+                            file = NamedTemporaryFile(dir=file_path.parent)
+                            files.append(file)
+                        else:
+                            file = fp
+                        writer = partial(write_from_start, file)
+                    workers.append(
+                        self._download_worker(
+                            str(object_name),
+                            writer,  # type: ignore
+                            etag=etag,
+                            range_step=range_step,
+                            range_start=range_start,
+                            range_end=range_end,
+                            range_get_tries=range_get_tries,
+                            buffer_size=buffer_size,
+                            **kwargs,
+                        ),
+                    )
+
+                await asyncio.gather(*workers)
+
+            if files:
+                # First part already in `file_path`
+                log.debug("Joining %d parts to %s", len(files) + 1, file_path)
+                await concat_files(
+                    file_path, files, buffer_size=buffer_size,
+                )
+        except Exception:
+            log.exception(
+                "Error on file download. Removing possibly incomplete file %s",
+                file_path,
+            )
+            with suppress(FileNotFoundError):
+                os.unlink(file_path)
+            raise
