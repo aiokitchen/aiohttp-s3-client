@@ -54,6 +54,7 @@ setup(
             "pytest",
             "pytest-aiohttp",
             "pytest-cov",
+            "pytest-timeout",
             "tox>=2.4",
         ],
     },

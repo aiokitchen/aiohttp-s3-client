@@ -8,6 +8,7 @@ from collections import deque
 from contextlib import suppress
 from functools import partial
 from http import HTTPStatus
+from itertools import chain
 from mimetypes import guess_type
 from mmap import PAGESIZE
 from pathlib import Path
@@ -408,6 +409,23 @@ class S3Client:
             **kwargs,
         )
 
+    async def _parts_generator(
+        self, gen, workers_count: int, parts_queue: asyncio.Queue,
+    ) -> int:
+        part_no = 1
+        async with gen:
+            async for part_hash, part in gen:
+                log.debug(
+                    "Reading part %d (%d bytes)", part_no, len(part),
+                )
+                await parts_queue.put((part_no, part_hash, part))
+                part_no += 1
+
+        for _ in range(workers_count):
+            await parts_queue.put(DONE)
+
+        return part_no
+
     async def put_multipart(
         self,
         object_name: t.Union[str, Path],
@@ -445,7 +463,6 @@ class S3Client:
         )
         log.debug("Got upload id %s for %s", upload_id, object_name)
 
-        part_no = 1
         parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
         results_queue: deque = deque()
         workers = [
@@ -467,19 +484,19 @@ class S3Client:
         else:
             gen = gen_without_hash(data)
 
-        async with gen:
-            async for part_hash, part in gen:
-                log.debug(
-                    "Reading part %d (%d bytes) of upload %s to %s",
-                    part_no, len(part), upload_id, object_name,
-                )
-                await parts_queue.put((part_no, part_hash, part))
-                part_no += 1
-
-        for _ in range(workers_count):
-            await parts_queue.put(DONE)
-
-        await asyncio.gather(*workers)
+        parts_generator = asyncio.create_task(
+            self._parts_generator(gen, workers_count, parts_queue),
+        )
+        try:
+            part_no, *_ = await asyncio.gather(
+                parts_generator,
+                *workers,
+            )
+        except Exception:
+            for task in chain([parts_generator], workers):
+                if not task.done():
+                    task.cancel()
+            raise
 
         log.debug(
             "All parts (#%d) of %s are uploaded to %s",
@@ -524,10 +541,9 @@ class S3Client:
         pos = req_range_start
         async with self.get(object_name, headers=headers, **kwargs) as resp:
             if resp.status not in (HTTPStatus.PARTIAL_CONTENT, HTTPStatus.OK):
-                payload = await resp.text()
                 raise AwsDownloadError(
                     f"Got wrong status code {resp.status} on range download "
-                    f"of {object_name}: {payload}",
+                    f"of {object_name}",
                 )
             while True:
                 chunk = await resp.content.read(buffer_size)
