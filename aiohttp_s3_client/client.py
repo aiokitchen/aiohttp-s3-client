@@ -8,11 +8,11 @@ from collections import deque
 from contextlib import suppress
 from functools import partial
 from http import HTTPStatus
+from itertools import chain
 from mimetypes import guess_type
 from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from itertools import chain
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
@@ -485,12 +485,12 @@ class S3Client:
             gen = gen_without_hash(data)
 
         parts_generator = asyncio.create_task(
-            self._parts_generator(gen, workers_count, parts_queue)
+            self._parts_generator(gen, workers_count, parts_queue),
         )
         try:
             part_no, *_ = await asyncio.gather(
                 parts_generator,
-                *workers
+                *workers,
             )
         except Exception:
             for task in chain([parts_generator], workers):
