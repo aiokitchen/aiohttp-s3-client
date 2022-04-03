@@ -24,7 +24,10 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from aiohttp_s3_client.xml import (
-    create_complete_upload_request, parse_create_multipart_upload_id,
+    create_complete_upload_request,
+    parse_create_multipart_upload_id,
+    parse_list_objects,
+    AwsObjectMeta,
 )
 
 
@@ -691,3 +694,65 @@ class S3Client:
             with suppress(FileNotFoundError):
                 os.unlink(file_path)
             raise
+
+    async def list_objects_v2(
+        self,
+        object_name: t.Union[str, Path] = "/",
+        *,
+        bucket: t.Optional[str] = None,
+        prefix: t.Union[str, Path] = None,
+        delimiter: t.Optional[str] = None,
+        max_keys: t.Optional[int] = None,
+        start_after: t.Optional[str] = None,
+    ) -> t.AsyncIterator[t.List[AwsObjectMeta]]:
+        """
+        List objects in bucket.
+
+        Returns an iterator over lists of metadata objects, each corresponding
+        to an individual response result (typically limited to 1000 keys).
+
+        object_name:
+            path to listing endpoint, defaults to '/'; a `bucket` value is
+            prepended to this value if provided.
+        prefix:
+            limits the response to keys that begin with the specified
+            prefix
+        delimiter: a delimiter is a character you use to group keys
+        max_keys: maximum number of keys returned in the response
+        start_after: keys to start listing after
+        """
+
+        params = {
+            "list-type": "2",
+        }
+
+        if prefix:
+            params["prefix"] = str(prefix)
+
+        if delimiter:
+            params["delimiter"] = delimiter
+
+        if max_keys:
+            params["max-keys"] = str(max_keys)
+
+        if start_after:
+            params["start-after"] = start_after
+
+        if bucket is not None:
+            object_name = f"/{bucket}"
+
+        while True:
+            async with self.get(str(object_name), params=params) as resp:
+                if resp.status != HTTPStatus.OK:
+                    raise AwsDownloadError(
+                        f"Got response with wrong status for GET request for "
+                        f"{object_name} with prefix '{prefix}'",
+                    )
+                payload = await resp.read()
+                metadata, continuation_token = parse_list_objects(payload)
+                if not metadata:
+                    break
+                yield metadata
+                if not continuation_token:
+                    break
+                params["continuation-token"] = continuation_token

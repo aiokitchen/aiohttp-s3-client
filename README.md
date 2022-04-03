@@ -59,6 +59,12 @@ async with ClientSession(raise_for_status=True) as session:
     # Delete object using bucket+key
     resp = await client.delete("bucket/key")
     assert resp == HTTPStatus.NO_CONTENT
+
+    # List objects by prefix
+    async for result in client.list_objects_v2("bucket/", prefix="prefix"):
+        # Each result is a list of metadata objects representing an object
+        # stored in the bucket.
+        do_work(result)
 ```
 
 Bucket may be specified as subdomain or in object name:

@@ -62,6 +62,31 @@ async def test_put_file(s3_client: S3Client, s3_read, tmp_path):
         assert (await s3_read("/test/test2")) == data
 
 
+async def test_list_objects_v2(s3_client: S3Client, s3_read, tmp_path):
+    data = b"hello, world"
+
+    with (tmp_path / "hello.txt").open("wb") as f:
+        f.write(data)
+        f.flush()
+
+        resp = await s3_client.put_file("/test/list/test1", f.name)
+        assert resp.status == HTTPStatus.OK
+
+        resp = await s3_client.put_file("/test/list/test2", f.name)
+        assert resp.status == HTTPStatus.OK
+
+        # Test list file
+        batch = 0
+        async for result in s3_client.list_objects_v2(
+            prefix="test/list/",
+            delimiter="/",
+            max_keys=1
+        ):
+            batch += 1
+            assert result[0].key == f"test/list/test{batch}"
+            assert result[0].size == len(data)
+
+
 async def test_url_path_with_colon(s3_client: S3Client, s3_read):
     data = b"hello, world"
     key = "/some-path:with-colon.txt"
