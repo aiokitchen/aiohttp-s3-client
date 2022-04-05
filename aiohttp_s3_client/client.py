@@ -644,6 +644,7 @@ class S3Client:
         files = []
         worker_range_size = file_size // workers_count
         range_end = 0
+        file: t.IO[bytes]
         try:
             with file_path.open("w+b") as fp:
                 for range_start in range(0, file_size, worker_range_size):
