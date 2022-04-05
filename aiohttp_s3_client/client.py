@@ -625,7 +625,7 @@ class S3Client:
         buffer_size: size of a buffer for on the fly data
         """
         file_path = Path(file_path)
-        async with self.head(str(object_name)) as resp:
+        async with self.head(str(object_name), headers=headers) as resp:
             if resp.status != HTTPStatus.OK:
                 raise AwsDownloadError(
                     f"Got response for HEAD request for {object_name}"
@@ -644,6 +644,7 @@ class S3Client:
         files = []
         worker_range_size = file_size // workers_count
         range_end = 0
+        file: t.IO[bytes]
         try:
             with file_path.open("w+b") as fp:
                 for range_start in range(0, file_size, worker_range_size):
@@ -663,12 +664,13 @@ class S3Client:
                         self._download_worker(
                             str(object_name),
                             writer,  # type: ignore
+                            buffer_size=buffer_size,
                             etag=etag,
-                            range_step=range_step,
-                            range_start=range_start,
+                            headers=headers,
                             range_end=range_end,
                             range_get_tries=range_get_tries,
-                            buffer_size=buffer_size,
+                            range_start=range_start,
+                            range_step=range_step,
                             **kwargs,
                         ),
                     )
