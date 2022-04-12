@@ -42,7 +42,7 @@ async def test_get_file_that_changed_in_process_error(
 
     def iterable():
         for _ in range(8):  # type: int
-            yield secrets.token_hex(1024).encode()
+            yield secrets.token_hex(1024 * 1024 * 5).encode()
 
     await s3_client.put_multipart(
         object_name,
@@ -71,6 +71,6 @@ async def test_get_file_that_changed_in_process_error(
 
     assert err.type is AwsDownloadError
     assert err.value.args[0].startswith(
-        "Got wrong status code 412 on range download of test/test",
+        "Got wrong status code 416 on range download of test/test",
     )
     assert not os.path.exists(tmpdir / "temp.dat")

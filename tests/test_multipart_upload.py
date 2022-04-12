@@ -4,19 +4,19 @@ from aiohttp_s3_client import S3Client
 
 
 async def test_multipart_file_upload(s3_client: S3Client, s3_read, tmp_path):
-    data = b"hello, world" * 1024
+    data = b"hello, world" * 1024 * 128
 
     with (tmp_path / "hello.txt").open("wb") as f:
         f.write(data)
         f.flush()
 
         await s3_client.put_file_multipart(
-            "/test/test",
+            "/test/test_multipart",
             f.name,
-            part_size=1024,
+            part_size=5 * (1024 * 1024),
         )
 
-    assert (await s3_read("/test/test")) == data
+    assert data == (await s3_read("/test/test_multipart"))
 
 
 @pytest.mark.parametrize("calculate_content_sha256", [True, False])
@@ -28,7 +28,7 @@ async def test_multipart_stream_upload(
 
     def iterable():
         for _ in range(8):  # type: int
-            yield b"hello world" * 1024
+            yield b"hello world" * 1024 * 1024
 
     await s3_client.put_multipart(
         "/test/test",
@@ -37,4 +37,4 @@ async def test_multipart_stream_upload(
         workers_count=workers_count,
     )
 
-    assert (await s3_read("/test/test")) == b"hello world" * 1024 * 8
+    assert (await s3_read("/test/test")) == b"hello world" * 1024 * 1024 * 8
