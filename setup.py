@@ -42,7 +42,7 @@ setup(
     packages=packages,
     package_data=package_data,
     install_requires=[
-        "aiomisc<16,>=14", "aiohttp<4", "aws-request-signer==1.0.0",
+        "aiomisc<17,>=14", "aiohttp<4", "aws-request-signer==1.0.0",
     ],
     python_requires=">3.7.*, <4",
     extras_require={
