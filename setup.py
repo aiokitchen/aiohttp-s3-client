@@ -42,11 +42,12 @@ setup(
     packages=packages,
     package_data=package_data,
     install_requires=[
-        "aiomisc<17,>=14", "aiohttp<4", "aws-request-signer==1.0.0",
+        "aiomisc<18,>=14", "aiohttp<4", "aws-request-signer==1.0.0",
     ],
     python_requires=">3.7.*, <4",
     extras_require={
         "develop": [
+            "aiomisc-pytest~=1.1",
             "coverage!=4.3",
             "coveralls",
             "mypy",
