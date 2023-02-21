@@ -51,7 +51,7 @@ setup(
             "coverage!=4.3",
             "coveralls",
             "mypy",
-            "pylava",
+            "pylama",
             "pytest",
             "pytest-aiohttp",
             "pytest-cov",
