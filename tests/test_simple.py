@@ -3,7 +3,6 @@ import sys
 from http import HTTPStatus
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable
 
 import pytest
 
@@ -31,8 +30,8 @@ async def test_put_bytes(s3_client: S3Client, s3_read, object_name):
 
 @pytest.mark.parametrize("object_name", ("test/test", "/test/test"))
 async def test_put_async_iterable(s3_client: S3Client, s3_read, object_name):
-    async def async_iterable(iterable: Iterable[bytes]):
-        for i in iterable:  # type: int
+    async def async_iterable(iterable: bytes):
+        for i in iterable:
             yield i.to_bytes(1, sys.byteorder)
 
     data = b"hello, world"
@@ -98,8 +97,8 @@ async def test_url_path_with_colon(s3_client: S3Client, s3_read):
 
 @pytest.mark.parametrize("object_name", ("test/test", "/test/test"))
 async def test_put_compression(s3_client: S3Client, s3_read, object_name):
-    async def async_iterable(iterable: Iterable[bytes]):
-        for i in iterable:  # type: int
+    async def async_iterable(iterable: bytes):
+        for i in iterable:
             yield i.to_bytes(1, sys.byteorder)
 
     data = b"hello, world"
