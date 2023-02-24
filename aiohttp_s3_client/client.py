@@ -634,7 +634,7 @@ class S3Client:
                     f"Got response for HEAD request for {object_name}"
                     f"of a wrong status {resp.status}",
                 )
-            etag = resp.headers["Etag"].strip('"')
+            etag = resp.headers["Etag"]
             file_size = int(resp.headers["Content-Length"])
             log.debug(
                 "Object's %s etag is %s and size is %d",
