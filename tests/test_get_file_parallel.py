@@ -71,6 +71,6 @@ async def test_get_file_that_changed_in_process_error(
 
     assert err.type is AwsDownloadError
     assert err.value.args[0].startswith(
-        "Got wrong status code 416 on range download of test/test",
+        "Got wrong status code 412 on range download of test/test",
     )
     assert not os.path.exists(tmpdir / "temp.dat")

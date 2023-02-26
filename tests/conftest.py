@@ -9,7 +9,7 @@ from aiohttp_s3_client import S3Client
 
 
 @pytest.fixture
-async def s3_client(loop, s3_url: URL):
+async def s3_client(event_loop, s3_url: URL):
     async with ClientSession(
         raise_for_status=False, auto_decompress=False,
     ) as session:

@@ -124,8 +124,8 @@ ParamsType = t.Optional[t.Mapping[str, str]]
 class S3Client:
     def __init__(
         self, session: ClientSession, url: URL,
-        secret_access_key: str = None,
-        access_key_id: str = None,
+        secret_access_key: t.Optional[str] = None,
+        access_key_id: t.Optional[str] = None,
         region: str = "",
     ):
         access_key_id = access_key_id or url.user
@@ -155,11 +155,11 @@ class S3Client:
 
     def request(
         self, method: str, path: str,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
         params: ParamsType = None,
         data: t.Optional[DataType] = None,
         data_length: t.Optional[int] = None,
-        content_sha256: str = None,
+        content_sha256: t.Optional[str] = None,
         **kwargs,
     ) -> RequestContextManager:
         if isinstance(data, bytes):
@@ -247,8 +247,8 @@ class S3Client:
     def put_file(
         self, object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
-        *, headers: HeadersType = None,
-        chunk_size: int = CHUNK_SIZE, content_sha256: str = None,
+        *, headers: t.Optional[HeadersType] = None,
+        chunk_size: int = CHUNK_SIZE, content_sha256: t.Optional[str] = None,
     ) -> RequestContextManager:
 
         headers = self._prepare_headers(headers, str(file_path))
@@ -270,7 +270,7 @@ class S3Client:
     async def _create_multipart_upload(
         self,
         object_name: str,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
     ) -> str:
         async with self.post(
             object_name,
@@ -372,7 +372,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
         *,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
         part_size: int = PART_SIZE,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
@@ -434,7 +434,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         data: t.Iterable[bytes],
         *,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
         workers_count: int = 1,
         max_size: t.Optional[int] = None,
         part_upload_tries: int = 3,
@@ -523,7 +523,7 @@ class S3Client:
         req_range_start: int,
         req_range_end: int,
         buffer_size: int,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
         **kwargs,
     ):
         """
@@ -566,7 +566,7 @@ class S3Client:
         range_end: int,
         buffer_size: int,
         range_get_tries: int = 3,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
         **kwargs,
     ):
         """
@@ -607,7 +607,7 @@ class S3Client:
         object_name: t.Union[str, Path],
         file_path: t.Union[str, Path],
         *,
-        headers: HeadersType = None,
+        headers: t.Optional[HeadersType] = None,
         range_step: int = PART_SIZE,
         workers_count: int = 1,
         range_get_tries: int = 3,
@@ -634,7 +634,7 @@ class S3Client:
                     f"Got response for HEAD request for {object_name}"
                     f"of a wrong status {resp.status}",
                 )
-            etag = resp.headers["Etag"].strip('"')
+            etag = resp.headers["Etag"]
             file_size = int(resp.headers["Content-Length"])
             log.debug(
                 "Object's %s etag is %s and size is %d",
@@ -700,7 +700,7 @@ class S3Client:
         object_name: t.Union[str, Path] = "/",
         *,
         bucket: t.Optional[str] = None,
-        prefix: t.Union[str, Path] = None,
+        prefix: t.Optional[t.Union[str, Path]] = None,
         delimiter: t.Optional[str] = None,
         max_keys: t.Optional[int] = None,
         start_after: t.Optional[str] = None,
