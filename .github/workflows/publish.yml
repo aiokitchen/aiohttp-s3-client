@@ -26,6 +26,6 @@ jobs:
         run: poetry install
 
       - name: Publishing to pypi
-        run: poetry publish --skip-existing --no-interaction
+        run: poetry publish --build --skip-existing --no-interaction
         env:
           POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
