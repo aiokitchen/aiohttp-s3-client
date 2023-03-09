@@ -1,19 +1,6 @@
-author_info = (
-    ("Dmitry Orlov", "me@mosquito.su"),
-    ("Yuri Shikanov", "dizballanze@gmail.com"),
-    ("Alexander Vasin", "hi@alvass.in"),
-)
+# THIS FILE WAS GENERATED AUTOMATICALLY
+# BY: poem-plugins "git" plugin
+# NEVER EDIT THIS FILE MANUALLY
 
-package_info = (
-    "The simple module for putting and getting object from Amazon S3 "
-    "compatible endpoints"
-)
-
-package_license = "Apache Software License"
-
-team_email = "me@mosquito.su"
-
-version_info = (0, 7, 2)
-
-__author__ = ", ".join("{} <{}>".format(*info) for info in author_info)
-__version__ = ".".join(map(str, version_info))
+version_info = (0, 8, 11)
+__version__ = "0.8.11"
