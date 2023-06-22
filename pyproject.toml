@@ -39,7 +39,7 @@ classifiers = [
 [tool.poetry.dependencies]
 aiohttp = "^3"
 aiomisc = "^17"
-aws-request-signer = "1.0.0"
+aws-request-signer = "1.2.0"
 python = "^3.7"
 
 [tool.poetry.group.dev.dependencies]

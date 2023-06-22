@@ -126,6 +126,7 @@ class S3Client:
         self, session: ClientSession, url: URL,
         secret_access_key: t.Optional[str] = None,
         access_key_id: t.Optional[str] = None,
+        session_token: t.Optional[str] = None,
         region: str = "",
     ):
         access_key_id = access_key_id or url.user
@@ -146,7 +147,7 @@ class S3Client:
         self._session = session
         self._signer = AwsRequestSigner(
             region=region, service="s3", access_key_id=access_key_id,
-            secret_access_key=secret_access_key,
+            secret_access_key=secret_access_key, session_token=session_token
         )
 
     @property

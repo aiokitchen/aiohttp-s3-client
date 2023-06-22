@@ -87,6 +87,14 @@ client = S3Client(url="http://your-s3-host", access_key_id="key_id",
 client = S3Client(url="http://key_id:access_key@your-s3-host", ...)
 ```
 
+Temporary credentials are supported by using a token.
+
+```python
+client = S3Client(url="http://your-s3-host", access_key_id="key_id",
+                  secret_access_key="access_key", session_token="token",
+                  ...)
+```
+
 ## Multipart upload
 
 For uploading large files [multipart uploading](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html)
