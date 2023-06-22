@@ -95,7 +95,6 @@ client = S3Client(url="http://your-s3-host", access_key_id="key_id",
                   ...)
 ```
 
-
 ## Multipart upload
 
 For uploading large files [multipart uploading](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html)
