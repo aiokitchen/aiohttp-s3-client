@@ -79,7 +79,7 @@ async def test_list_objects_v2(s3_client: S3Client, s3_read, tmp_path):
         async for result in s3_client.list_objects_v2(
             prefix="test/list/",
             delimiter="/",
-            max_keys=1
+            max_keys=1,
         ):
             batch += 1
             assert result[0].key == f"test/list/test{batch}"

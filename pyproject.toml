@@ -28,6 +28,8 @@ classifiers = [
     "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
@@ -37,17 +39,20 @@ classifiers = [
 "Tracker" = "https://github.com/aiokitchen/aiohttp-s3-client/issues"
 
 [tool.poetry.dependencies]
-aiohttp = "^3"
+aiohttp = "^3.8"
 aiomisc = "^17"
 aws-request-signer = "1.2.0"
+cached-property = [{ version = '^1.5.2', python = "< 3.8" }]
+typing_extensions = [{ version = '*', python = "< 3.8" }]
 python = "^3.7"
+
 
 [tool.poetry.group.dev.dependencies]
 aiomisc-pytest = "^1.1"
 coverage = "!=4.3"
 coveralls = "^3.3.1"
 mypy = "^1.0.1"
-pylama = "^8.4.1"
+pylama = {extras = ["toml"], version = "^8.4.1"}
 pytest = "^7.2.1"
 pytest-cov = "^4.0.0"
 pytest-timeout = "^2.1.0"
@@ -71,3 +76,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
 files = ["aiohttp_s3_client", "tests"]
+
+[tool.pylama]
+max_line_length = 80
+skip = ".venv*,.*cache,dist"
+
+[tool.pylama.linter.mccabe]
+max-complexity = 15

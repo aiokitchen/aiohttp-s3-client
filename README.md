@@ -68,34 +68,184 @@ async with ClientSession(raise_for_status=True) as session:
 ```
 
 Bucket may be specified as subdomain or in object name:
+
 ```python
-client = S3Client(url="http://bucket.your-s3-host", ...)
+import aiohttp
+from aiohttp_s3_client import S3Client
+
+
+client = S3Client(url="http://bucket.your-s3-host",
+                  session=aiohttp.ClientSession())
 async with client.put("key", gen()) as resp:
     ...
 
-client = S3Client(url="http://your-s3-host", ...)
-async with client.put("bucket/key", gen()) as resp:
+client = S3Client(url="http://your-s3-host",
+                  session=aiohttp.ClientSession())
+async with await client.put("bucket/key", gen()) as resp:
     ...
 
-client = S3Client(url="http://your-s3-host/bucket", ...)
+client = S3Client(url="http://your-s3-host/bucket",
+                  session=aiohttp.ClientSession())
 async with client.put("key", gen()) as resp:
     ...
 ```
 
 Auth may be specified with keywords or in URL:
 ```python
-client = S3Client(url="http://your-s3-host", access_key_id="key_id",
-                  secret_access_key="access_key", ...)
+import aiohttp
+from aiohttp_s3_client import S3Client
 
-client = S3Client(url="http://key_id:access_key@your-s3-host", ...)
+client_credentials_as_kw = S3Client(
+    url="http://your-s3-host",
+    access_key_id="key_id",
+    secret_access_key="access_key",
+    session=aiohttp.ClientSession(),
+)
+
+client_credentials_in_url = S3Client(
+    url="http://key_id:access_key@your-s3-host",
+    session=aiohttp.ClientSession(),
+)
 ```
 
-Temporary credentials are supported by using a token.
+## Credentials
+
+By default `S3Client` trying to collect all available credentials from keyword
+arguments like `access_key_id=` and `secret_access_key=`, after that from the
+username and password from passed `url` argument, so the nex step is environment
+variables parsing and the last source for collection is the config file.
+
+You can pass credentials explicitly using `aiohttp_s3_client.credentials`
+module.
+
+### `aiohttp_s3_client.credentials.StaticCredentials`
 
 ```python
-client = S3Client(url="http://your-s3-host", access_key_id="key_id",
-                  secret_access_key="access_key", session_token="token",
-                  ...)
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import StaticCredentials
+
+credentials = StaticCredentials(
+    access_key_id='aaaa',
+    secret_access_key='bbbb',
+    region='us-east-1',
+)
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+    credentials=credentials,
+)
+```
+
+### `aiohttp_s3_client.credentials.URLCredentials`
+
+```python
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import URLCredentials
+
+url = "http://key@hack-me:your-s3-host"
+credentials = URLCredentials(url, region="us-east-1")
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+    credentials=credentials,
+)
+```
+
+### `aiohttp_s3_client.credentials.EnvironmentCredentials`
+
+```python
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import EnvironmentCredentials
+
+credentials = EnvironmentCredentials(region="us-east-1")
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+    credentials=credentials,
+)
+```
+
+### `aiohttp_s3_client.credentials.ConfigCredentials`
+
+Using user config file:
+
+```python
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import ConfigCredentials
+
+
+credentials = ConfigCredentials()   # Will be used ~/.aws/credentials config
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+    credentials=credentials,
+)
+```
+
+Using the custom config location:
+
+```python
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import ConfigCredentials
+
+
+credentials = ConfigCredentials("~/.my-custom-aws-credentials")
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+    credentials=credentials,
+)
+```
+
+### `aiohttp_s3_client.credentials.merge_credentials`
+
+This function collect all passed credentials instances and return a new one
+which contains all non-blank fields from passed instances. The first argument
+has more priority.
+
+
+```python
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import (
+    ConfigCredentials, EnvironmentCredentials, merge_credentials
+)
+
+credentials = merge_credentials(
+    EnvironmentCredentials(),
+    ConfigCredentials(),
+)
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+    credentials=credentials,
+)
+```
+
+
+### `aiohttp_s3_client.credentials.MetadataCredentials`
+
+Trying to get credentials from the metadata service:
+
+```python
+import aiohttp
+from aiohttp_s3_client import S3Client
+from aiohttp_s3_client.credentials import MetadataCredentials
+
+credentials = MetadataCredentials()
+
+# start refresh credentials from metadata server
+await credentials.start()
+client = S3Client(
+    url="http://your-s3-host",
+    session=aiohttp.ClientSession(),
+)
+await credentials.stop()
 ```
 
 ## Multipart upload
@@ -106,11 +256,15 @@ to S3.
 S3Client handles retries of part uploads and calculates part hash for integrity checks.
 
 ```python
-client = S3Client()
+import aiohttp
+from aiohttp_s3_client import S3Client
+
+
+client = S3Client(url="http://your-s3-host", session=aiohttp.ClientSession())
 await client.put_file_multipart(
     "test/bigfile.csv",
     headers={
-    	"Content-Type": "text/csv",
+        "Content-Type": "text/csv",
     },
     workers_count=8,
 )
@@ -121,13 +275,18 @@ await client.put_file_multipart(
 S3 supports `GET` requests with `Range` header. It's possible to download
 objects in parallel with multiple connections for speedup.
 S3Client handles retries of partial requests and makes sure that file won't
-changed during download with `ETag` header.
-If your system supports `pwrite` syscall (linux, macos, etc) it will be used to
+be changed during download with `ETag` header.
+If your system supports `pwrite` syscall (Linux, macOS, etc.) it will be used to
 write simultaneously to a single file. Otherwise, each worker will have own file
 which will be concatenated after downloading.
 
 ```python
-client = S3Client()
+import aiohttp
+from aiohttp_s3_client import S3Client
+
+
+client = S3Client(url="http://your-s3-host", session=aiohttp.ClientSession())
+
 await client.get_file_parallel(
     "dump/bigfile.csv",
     "/home/user/bigfile.csv",

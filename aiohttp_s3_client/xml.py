@@ -43,7 +43,7 @@ def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
 
 
 def parse_list_objects(payload: bytes) -> Tuple[
-    List[AwsObjectMeta], Optional[str]
+    List[AwsObjectMeta], Optional[str],
 ]:
     root = ET.fromstring(payload)
     result = []
@@ -61,7 +61,7 @@ def parse_list_objects(payload: bytes) -> Tuple[
             elif tag == "LastModified":
                 assert text[-1] == "Z"
                 last_modified = datetime.fromisoformat(text[:-1]).replace(
-                    tzinfo=timezone.utc
+                    tzinfo=timezone.utc,
                 )
             elif tag == "Size":
                 size = int(text)
