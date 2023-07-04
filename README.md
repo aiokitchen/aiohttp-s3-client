@@ -70,13 +70,16 @@ async with ClientSession(raise_for_status=True) as session:
 Bucket may be specified as subdomain or in object name:
 ```python
 client = S3Client(url="http://bucket.your-s3-host", ...)
-resp = await client.put("key", gen())
+async with client.put("key", gen()) as resp:
+    ...
 
 client = S3Client(url="http://your-s3-host", ...)
-resp = await client.put("bucket/key", gen())
+async with client.put("bucket/key", gen()) as resp:
+    ...
 
 client = S3Client(url="http://your-s3-host/bucket", ...)
-resp = await client.put("key", gen())
+async with client.put("key", gen()) as resp:
+    ....
 ```
 
 Auth may be specified with keywords or in URL:
