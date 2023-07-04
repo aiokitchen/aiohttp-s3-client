@@ -9,7 +9,7 @@ from pytest_aiohttp.plugin import TestServer
 
 from aiohttp_s3_client.credentials import (
     AbstractCredentials, ConfigCredentials, EnvironmentCredentials,
-    MetadataCredentials, StaticCredentials, URLCredentials,
+    MetadataCredentials, StaticCredentials, URLCredentials, merge_credentials,
 )
 
 
@@ -281,3 +281,33 @@ async def test_metadata_credentials(
     assert credentials.signer.access_key_id == "PYTESTACCESSKEYID"
     assert credentials.signer.secret_access_key == "PYTESTACCESSKEYSECRET"
     assert credentials.signer.session_token == "PYTESTACCESSTOKEN"
+
+
+async def test_merge_credentials():
+    credentials = [
+        StaticCredentials(access_key_id="access_key"),
+        StaticCredentials(secret_access_key="secret"),
+        StaticCredentials(session_token="token")
+    ]
+
+    assert not all(credentials)
+
+    result = merge_credentials(*credentials)
+    assert result
+
+    assert result.access_key_id == credentials[0].access_key_id
+    assert result.secret_access_key == credentials[1].secret_access_key
+    assert result.session_token == credentials[2].session_token
+
+    result = merge_credentials(
+        StaticCredentials(
+            access_key_id="overriden",
+            secret_access_key="overriden",
+            session_token="overriden"
+        ),
+        *credentials
+    )
+
+    assert result.access_key_id == "overriden"
+    assert result.secret_access_key == "overriden"
+    assert result.session_token == "overriden"
