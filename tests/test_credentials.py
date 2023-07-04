@@ -3,10 +3,9 @@ import os
 from unittest import mock
 
 import pytest
-from pytest import FixtureRequest
-
 from aiohttp import web
-from aiohttp.pytest_plugin import TestServer
+from pytest import FixtureRequest
+from pytest_aiohttp.plugin import TestServer
 
 from aiohttp_s3_client.credentials import (
     AbstractCredentials, ConfigCredentials, EnvironmentCredentials,
@@ -20,7 +19,7 @@ def test_static_credentials():
 
 
 def test_static_credentials_repr():
-    assert not "hack-me" in repr(
+    assert "hack-me" not in repr(
         StaticCredentials(access_key_id="foo", secret_access_key="hack-me"),
     )
 
@@ -28,8 +27,8 @@ def test_static_credentials_repr():
 def test_url_credentials():
     credentials = URLCredentials("http://key:secret@host")
     assert isinstance(credentials, AbstractCredentials)
-    assert credentials.signer.access_key_id == 'key'
-    assert credentials.signer.secret_access_key == 'secret'
+    assert credentials.signer.access_key_id == "key"
+    assert credentials.signer.secret_access_key == "secret"
 
 
 @mock.patch.dict(os.environ, {})
@@ -133,7 +132,7 @@ def metadata_server_app() -> web.Application:
         """
         last_updated = datetime.datetime.utcnow()
 
-        if request.match_info['role'] != "pytest":
+        if request.match_info["role"] != "pytest":
             raise web.HTTPNotFound()
 
         return web.json_response(
@@ -147,15 +146,15 @@ def metadata_server_app() -> web.Application:
                 "Expiration": (
                     last_updated + datetime.timedelta(hours=2)
                 ).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                )
+                    "%Y-%m-%dT%H:%M:%SZ",
+                ),
             },
-            content_type="text/plain"
+            content_type="text/plain",
         )
 
     app.router.add_get(
         "/latest/meta-data/iam/security-credentials/{role}",
-        get_iam_role
+        get_iam_role,
     )
 
     async def get_security_credentials(request: web.Request) -> web.Response:
@@ -177,11 +176,11 @@ def metadata_server_app() -> web.Application:
         <
         pytest
         """
-        return web.Response(body='pytest')
+        return web.Response(body="pytest")
 
     app.router.add_get(
-        '/latest/meta-data/iam/security-credentials/',
-        get_security_credentials
+        "/latest/meta-data/iam/security-credentials/",
+        get_security_credentials,
     )
 
     async def get_instance_identity(request: web.Request) -> web.Response:
@@ -240,14 +239,14 @@ def metadata_server_app() -> web.Application:
                 "privateIp": "172.33.33.33",
                 "ramdiskId": None,
                 "region": "us-east-99",
-                "version": "2017-09-30"
+                "version": "2017-09-30",
             },
-            content_type="text/plain"
+            content_type="text/plain",
         )
 
     app.router.add_get(
         "/latest/dynamic/instance-identity/document",
-        get_instance_identity
+        get_instance_identity,
     )
 
     return app
@@ -255,7 +254,7 @@ def metadata_server_app() -> web.Application:
 
 async def test_metadata_credentials(
     request: FixtureRequest,
-    metadata_server_app
+    metadata_server_app,
 ):
     server = TestServer(metadata_server_app)
     await server.start_server()
@@ -278,7 +277,7 @@ async def test_metadata_credentials(
     assert credentials
 
     assert credentials.signer
-    assert credentials.signer.region == 'us-east-99'
-    assert credentials.signer.access_key_id == 'PYTESTACCESSKEYID'
-    assert credentials.signer.secret_access_key == 'PYTESTACCESSKEYSECRET'
-    assert credentials.signer.session_token == 'PYTESTACCESSTOKEN'
+    assert credentials.signer.region == "us-east-99"
+    assert credentials.signer.access_key_id == "PYTESTACCESSKEYID"
+    assert credentials.signer.secret_access_key == "PYTESTACCESSKEYSECRET"
+    assert credentials.signer.session_token == "PYTESTACCESSTOKEN"
