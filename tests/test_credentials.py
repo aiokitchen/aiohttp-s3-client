@@ -6,6 +6,7 @@ import pytest
 from pytest import FixtureRequest
 
 from aiohttp import web
+from aiohttp.pytest_plugin import TestServer
 
 from aiohttp_s3_client.credentials import (
     AbstractCredentials, ConfigCredentials, EnvironmentCredentials,
@@ -254,10 +255,10 @@ def metadata_server_app() -> web.Application:
 
 async def test_metadata_credentials(
     request: FixtureRequest,
-    aiohttp_server,
     metadata_server_app
 ):
-    server = await aiohttp_server(metadata_server_app)
+    server = TestServer(metadata_server_app)
+    await server.start_server()
 
     class TestMetadataCredentials(MetadataCredentials):
         METADATA_ADDRESS = server.host

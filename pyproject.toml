@@ -43,7 +43,7 @@ aiohttp = "^3.8"
 aiomisc = "^17"
 aws-request-signer = "1.2.0"
 cached-property = [{ version = '^1.5.2', python = "< 3.8" }]
-typing_extensions = [{ version = '*', python = "< 3.8" }]
+typing_extensions = [{ version = '*', python = "< 3.10" }]
 python = "^3.7"
 
 
@@ -51,7 +51,7 @@ python = "^3.7"
 aiomisc-pytest = "^1.1"
 coverage = "!=4.3"
 coveralls = "^3.3.1"
-mypy = "^1.0.1"
+mypy = "*"
 pylama = {extras = ["toml"], version = "^8.4.1"}
 pytest = "^7.2.1"
 pytest-cov = "^4.0.0"
