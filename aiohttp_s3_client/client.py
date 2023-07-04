@@ -19,15 +19,16 @@ from aiohttp import ClientSession, hdrs
 from aiohttp.client import _RequestContextManager as RequestContextManager
 from aiohttp.client_exceptions import ClientError
 from aiomisc import asyncbackoff, threaded, threaded_iterable
-from aws_request_signer import UNSIGNED_PAYLOAD, AwsRequestSigner
+from aws_request_signer import UNSIGNED_PAYLOAD
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
+from aiohttp_s3_client.credentials import (
+    AbstractCredentials, collect_credentials,
+)
 from aiohttp_s3_client.xml import (
-    create_complete_upload_request,
-    parse_create_multipart_upload_id,
-    parse_list_objects,
-    AwsObjectMeta,
+    AwsObjectMeta, create_complete_upload_request,
+    parse_create_multipart_upload_id, parse_list_objects,
 )
 
 
@@ -59,7 +60,7 @@ class AwsDownloadError(AwsError):
 
 @threaded
 def concat_files(
-    target_file: Path, files: t.List[io.BytesIO], buffer_size: int,
+    target_file: Path, files: t.List[t.IO[bytes]], buffer_size: int,
 ) -> None:
     with target_file.open("ab") as fp:
         for file in files:
@@ -123,32 +124,31 @@ ParamsType = t.Optional[t.Mapping[str, str]]
 
 class S3Client:
     def __init__(
-        self, session: ClientSession, url: URL,
+        self, session: ClientSession, url: t.Union[URL, str],
         secret_access_key: t.Optional[str] = None,
         access_key_id: t.Optional[str] = None,
         session_token: t.Optional[str] = None,
         region: str = "",
+        credentials: t.Optional[AbstractCredentials] = None,
     ):
-        access_key_id = access_key_id or url.user
-        secret_access_key = secret_access_key or url.password
-
-        if not access_key_id:
-            raise ValueError(
-                "access_key id must be passed as argument "
-                "or as username in the url",
+        url = URL(url)
+        if credentials is None:
+            credentials = collect_credentials(
+                url=url,
+                access_key_id=access_key_id,
+                region=region,
+                secret_access_key=secret_access_key,
+                session_token=session_token,
             )
-        if not secret_access_key:
+
+        if not credentials:
             raise ValueError(
-                "secret_access_key id must be passed as argument "
-                "or as username in the url",
+                f"Credentials {credentials!r} is incomplete",
             )
 
         self._url = URL(url).with_user(None).with_password(None)
         self._session = session
-        self._signer = AwsRequestSigner(
-            region=region, service="s3", access_key_id=access_key_id,
-            secret_access_key=secret_access_key, session_token=session_token
-        )
+        self._credentials = credentials
 
     @property
     def url(self) -> URL:
@@ -183,7 +183,7 @@ class S3Client:
 
         headers = self._make_headers(headers)
         headers.extend(
-            self._signer.sign_with_headers(
+            self._credentials.signer.sign_with_headers(
                 method, str(url), headers=headers, content_hash=content_sha256,
             ),
         )
@@ -645,7 +645,7 @@ class S3Client:
             )
 
         workers = []
-        files = []
+        files: t.List[t.IO[bytes]] = []
         worker_range_size = file_size // workers_count
         range_end = 0
         file: t.IO[bytes]
