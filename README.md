@@ -34,31 +34,31 @@ async with ClientSession(raise_for_status=True) as session:
         assert resp.status == HTTPStatus.OK
 
     # Upload bytes object to bucket "bucket" and key "bytes"
-    resp = await client.put("bucket/bytes", b"hello, world")
-    assert resp.status == HTTPStatus.OK
+    async with await client.put("bucket/bytes", b"hello, world") as resp:
+        assert resp.status == HTTPStatus.OK
 
     # Upload AsyncIterable to bucket "bucket" and key "iterable"
     async def gen():
         yield b'some bytes'
 
-    resp = await client.put("bucket/file", gen())
-    assert resp.status == HTTPStatus.OK
+    async with client.put("bucket/file", gen()) as resp:
+        assert resp.status == HTTPStatus.OK
 
     # Upload file to bucket "bucket" and key "file"
-    resp = await client.put_file("bucket/file", "/path_to_file")
-    assert resp.status == HTTPStatus.OK
+    async with client.put_file("bucket/file", "/path_to_file") as resp:
+        assert resp.status == HTTPStatus.OK
 
     # Check object exists using bucket+key
-    resp = await client.head("bucket/key")
-    assert resp == HTTPStatus.OK
+    async with client.head("bucket/key") as resp:
+        assert resp == HTTPStatus.OK
 
     # Get object by bucket+key
-    resp = await client.get("bucket/key")
-    data = await resp.read()
+    async with client.get("bucket/key") as resp:
+        data = await resp.read()
 
     # Delete object using bucket+key
-    resp = await client.delete("bucket/key")
-    assert resp == HTTPStatus.NO_CONTENT
+    async with client.delete("bucket/key") as resp:
+        assert resp == HTTPStatus.NO_CONTENT
 
     # List objects by prefix
     async for result in client.list_objects_v2("bucket/", prefix="prefix"):
