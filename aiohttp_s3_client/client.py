@@ -71,7 +71,6 @@ class AwsDownloadError(AwsError):
 if sys.version_info < (3, 8):
     from contextlib import suppress
 
-
     @threaded
     def unlink_path(path: Path) -> None:
         with suppress(FileNotFoundError):
