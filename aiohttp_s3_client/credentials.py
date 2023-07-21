@@ -101,12 +101,13 @@ class ConfigCredentials(StaticCredentials):
 
     @staticmethod
     def _parse_ini_section(path: Path, section: str) -> Mapping[str, str]:
-        if not path.exists():
-            return {}
         conf = configparser.ConfigParser()
-        conf.read(path)
+        if not conf.read(path):
+            return {}
+
         if section not in conf:
             return {}
+
         return conf[section]
 
     def __init__(
@@ -133,7 +134,14 @@ class ConfigCredentials(StaticCredentials):
             )
         config_path = Path(config_path)
 
-        if not credentials_path.exists() or not config_path.exists():
+        try:
+            credentials_paths_exists = (
+                credentials_path.exists() and config_path.exists()
+            )
+        except OSError:
+            credentials_paths_exists = False
+
+        if not credentials_paths_exists:
             super().__init__(region=region, service=service)
             return
 
