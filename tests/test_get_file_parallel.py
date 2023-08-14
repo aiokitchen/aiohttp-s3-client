@@ -5,7 +5,7 @@ import secrets
 import pytest
 
 from aiohttp_s3_client import S3Client
-from aiohttp_s3_client.client import AwsDownloadError
+from aiohttp_s3_client.client import AwsDownloadError, AwsError
 
 
 async def test_get_file_parallel(s3_client: S3Client, tmpdir):
@@ -21,7 +21,9 @@ async def test_get_file_parallel(s3_client: S3Client, tmpdir):
 
 
 async def test_get_file_parallel_without_pwrite(
-    s3_client: S3Client, tmpdir, monkeypatch,
+    s3_client: S3Client,
+    tmpdir,
+    monkeypatch,
 ):
     monkeypatch.delattr("os.pwrite")
     data = b"Hello world! " * 100
@@ -36,7 +38,8 @@ async def test_get_file_parallel_without_pwrite(
 
 
 async def test_get_file_that_changed_in_process_error(
-    s3_client: S3Client, tmpdir,
+    s3_client: S3Client,
+    tmpdir,
 ):
     object_name = "test/test"
 
@@ -58,7 +61,7 @@ async def test_get_file_that_changed_in_process_error(
             workers_count=4,
         )
 
-    with pytest.raises(Exception) as err:
+    with pytest.raises(AwsError) as err:
         await asyncio.gather(
             s3_client.get_file_parallel(
                 object_name,
@@ -70,7 +73,7 @@ async def test_get_file_that_changed_in_process_error(
         )
 
     assert err.type is AwsDownloadError
-    assert err.value.args[0].startswith(
+    assert err.value.message.startswith(
         "Got wrong status code 412 on range download of test/test",
     )
     assert not os.path.exists(tmpdir / "temp.dat")

@@ -3,9 +3,9 @@ import hashlib
 import io
 import logging
 import os
+import sys
 import typing as t
 from collections import deque
-from contextlib import suppress
 from functools import partial
 from http import HTTPStatus
 from itertools import chain
@@ -16,8 +16,12 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
-from aiohttp.client import _RequestContextManager as RequestContextManager
-from aiohttp.client_exceptions import ClientError
+# noinspection PyProtectedMember
+from aiohttp.client import (
+    _RequestContextManager as RequestContextManager,
+    ClientResponse,
+)
+from aiohttp.client_exceptions import ClientError, ClientResponseError
 from aiomisc import asyncbackoff, threaded, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD
 from multidict import CIMultiDict, CIMultiDictProxy
@@ -31,9 +35,7 @@ from aiohttp_s3_client.xml import (
     parse_create_multipart_upload_id, parse_list_objects,
 )
 
-
 log = logging.getLogger(__name__)
-
 
 CHUNK_SIZE = 2 ** 16
 DONE = object()
@@ -42,12 +44,20 @@ PART_SIZE = 5 * 1024 * 1024  # 5MB
 
 HeadersType = t.Union[t.Dict, CIMultiDict, CIMultiDictProxy]
 
-
 threaded_iterable_constrained = threaded_iterable(max_size=2)
 
 
-class AwsError(ClientError):
-    pass
+class AwsError(ClientResponseError):
+    def __init__(
+        self, resp: ClientResponse, message: str, *history: ClientResponse
+    ):
+        super().__init__(
+            headers=resp.headers,
+            history=(resp, *history),
+            message=message,
+            request_info=resp.request_info,
+            status=resp.status,
+        )
 
 
 class AwsUploadError(AwsError):
@@ -56,6 +66,19 @@ class AwsUploadError(AwsError):
 
 class AwsDownloadError(AwsError):
     pass
+
+
+if sys.version_info < (3, 8):
+    from contextlib import suppress
+
+    @threaded
+    def unlink_path(path: Path) -> None:
+        with suppress(FileNotFoundError):
+            os.unlink(path.resolve())
+else:
+    @threaded
+    def unlink_path(path: Path) -> None:
+        path.unlink(missing_ok=True)
 
 
 @threaded
@@ -116,7 +139,6 @@ def file_sender(
 
 
 async_file_sender = threaded_iterable_constrained(file_sender)
-
 
 DataType = t.Union[bytes, str, t.AsyncIterable[bytes]]
 ParamsType = t.Optional[t.Mapping[str, str]]
@@ -282,8 +304,11 @@ class S3Client:
             payload = await resp.read()
             if resp.status != HTTPStatus.OK:
                 raise AwsUploadError(
-                    f"Wrong status code {resp.status} from s3 with message "
-                    f"{payload.decode()}.",
+                    resp,
+                    (
+                        f"Wrong status code {resp.status} from s3 "
+                        f"with message {payload.decode()}."
+                    ),
                 )
             return parse_create_multipart_upload_id(payload)
 
@@ -308,8 +333,11 @@ class S3Client:
             if resp.status != HTTPStatus.OK:
                 payload = await resp.text()
                 raise AwsUploadError(
-                    f"Wrong status code {resp.status} from s3 with message "
-                    f"{payload}.",
+                    resp,
+                    (
+                        f"Wrong status code {resp.status} from s3 "
+                        f"with message {payload}."
+                    ),
                 )
 
     async def _put_part(
@@ -331,8 +359,11 @@ class S3Client:
             payload = await resp.text()
             if resp.status != HTTPStatus.OK:
                 raise AwsUploadError(
-                    f"Wrong status code {resp.status} from s3 with message "
-                    f"{payload}.",
+                    resp,
+                    (
+                        f"Wrong status code {resp.status} from s3 "
+                        f"with message {payload}."
+                    ),
                 )
             return resp.headers["Etag"].strip('"')
 
@@ -519,7 +550,6 @@ class S3Client:
         writer: t.Callable[[bytes, int, int], t.Coroutine],
         *,
         etag: str,
-        pos: int,
         range_start: int,
         req_range_start: int,
         req_range_end: int,
@@ -546,8 +576,11 @@ class S3Client:
         async with self.get(object_name, headers=headers, **kwargs) as resp:
             if resp.status not in (HTTPStatus.PARTIAL_CONTENT, HTTPStatus.OK):
                 raise AwsDownloadError(
-                    f"Got wrong status code {resp.status} on range download "
-                    f"of {object_name}",
+                    resp,
+                    (
+                        f"Got wrong status code {resp.status} on "
+                        f"range download of {object_name}"
+                    ),
                 )
             while True:
                 chunk = await resp.content.read(buffer_size)
@@ -594,7 +627,6 @@ class S3Client:
                 object_name,
                 writer,
                 etag=etag,
-                pos=(req_range_start - range_start),
                 range_start=range_start,
                 req_range_start=req_range_start,
                 req_range_end=req_range_end - 1,
@@ -632,8 +664,11 @@ class S3Client:
         async with self.head(str(object_name), headers=headers) as resp:
             if resp.status != HTTPStatus.OK:
                 raise AwsDownloadError(
-                    f"Got response for HEAD request for {object_name}"
-                    f"of a wrong status {resp.status}",
+                    resp,
+                    (
+                        f"Got response for HEAD request for "
+                        f"{object_name} of a wrong status {resp.status}"
+                    ),
                 )
             etag = resp.headers["Etag"]
             file_size = int(resp.headers["Content-Length"])
@@ -692,8 +727,7 @@ class S3Client:
                 "Error on file download. Removing possibly incomplete file %s",
                 file_path,
             )
-            with suppress(FileNotFoundError):
-                os.unlink(file_path)
+            await unlink_path(file_path)
             raise
 
     async def list_objects_v2(
@@ -746,8 +780,11 @@ class S3Client:
             async with self.get(str(object_name), params=params) as resp:
                 if resp.status != HTTPStatus.OK:
                     raise AwsDownloadError(
-                        f"Got response with wrong status for GET request for "
-                        f"{object_name} with prefix '{prefix}'",
+                        resp,
+                        (
+                            "Got response with wrong status for GET request "
+                            f"for {object_name} with prefix '{prefix}'"
+                        ),
                     )
                 payload = await resp.read()
                 metadata, continuation_token = parse_list_objects(payload)
