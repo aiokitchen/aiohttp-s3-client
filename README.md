@@ -112,7 +112,7 @@ client_credentials_in_url = S3Client(
 
 By default `S3Client` trying to collect all available credentials from keyword
 arguments like `access_key_id=` and `secret_access_key=`, after that from the
-username and password from passed `url` argument, so the nex step is environment
+username and password from passed `url` argument, so the next step is environment
 variables parsing and the last source for collection is the config file.
 
 You can pass credentials explicitly using `aiohttp_s3_client.credentials`
