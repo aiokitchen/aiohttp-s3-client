@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from yarl import URL
 
 from aiohttp_s3_client import S3Client
 
@@ -112,3 +113,47 @@ async def test_put_compression(s3_client: S3Client, s3_read, object_name):
     # FIXME: uncomment after update fakes3 image
     actual = gzip.GzipFile(fileobj=BytesIO(result)).read()
     assert actual == data
+
+
+@pytest.mark.parametrize('method,given_url', [
+    # Simple test
+    ('GET', 'test/object'),
+
+    # Check method name is ok in lowercase
+    ('get', 'test/object'),
+
+    # Absolute path
+    ('GET', '/test/object'),
+
+    # Check URL object with path is given
+    ('get', URL('./test/object')),
+
+    # Check URL object with path is given
+    ('get', URL('/test/object')),
+])
+def test_presign_non_absolute_url(s3_client, s3_url, method, given_url):
+    presigned = s3_client.presign_url('get', 'test/object')
+    assert presigned.is_absolute()
+    assert presigned.scheme == s3_url.scheme
+    assert presigned.host == s3_url.host
+    assert presigned.port == s3_url.port
+    assert presigned.path.startswith(s3_url.path)
+    assert presigned.path.endswith(str(given_url).lstrip('.'))
+
+
+@pytest.mark.parametrize('method,given_url', [
+    # String url
+    ('GET', 'https://absolute-url:123/path'),
+
+    # URL object
+    ('GET', URL('https://absolute-url:123/path')),
+])
+def test_presign_absolute_url(s3_client, method, given_url):
+    presigned = s3_client.presign_url(method, given_url)
+    assert presigned.is_absolute()
+
+    url_object = URL(given_url)
+    assert presigned.scheme == url_object.scheme
+    assert presigned.host == url_object.host
+    assert presigned.port == url_object.port
+    assert presigned.path == url_object.path
