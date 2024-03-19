@@ -757,3 +757,35 @@ class S3Client:
                 if not continuation_token:
                     break
                 params["continuation-token"] = continuation_token
+
+    def presign_url(
+        self,
+        method: str,
+        url: t.Union[str, URL],
+        headers: t.Optional[HeadersType] = None,
+        content_sha256: t.Optional[str] = None,
+        expires: int = 86400,
+    ) -> URL:
+        """
+        Make presigned url which will expire in specified amount of seconds
+
+        method: HTTP method
+        url: object key or absolute URL
+        headers: optional headers you would like to pass
+        content_sha256:
+        expires: amount of seconds presigned url would be usable
+        """
+        if content_sha256 is None:
+            content_sha256 = UNSIGNED_PAYLOAD
+
+        _url = URL(url)
+        if not _url.is_absolute():
+            _url = self._url / str(_url)
+
+        return URL(self._credentials.signer.presign_url(
+            method=method.upper(),
+            url=str(_url),
+            headers=headers,
+            content_hash=content_sha256,
+            expires=expires
+        ))
