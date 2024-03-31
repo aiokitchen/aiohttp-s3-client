@@ -61,10 +61,10 @@ async with ClientSession(raise_for_status=True) as session:
         assert resp == HTTPStatus.NO_CONTENT
 
     # List objects by prefix
-    async for result in client.list_objects_v2("bucket/", prefix="prefix"):
+    async for result, prefixes in client.list_objects_v2("bucket/", prefix="prefix"):
         # Each result is a list of metadata objects representing an object
-        # stored in the bucket.
-        do_work(result)
+        # stored in the bucket.  Each prefixes is a list of common prefixes
+        do_work(result, prefixes)
 ```
 
 Bucket may be specified as subdomain or in object name:

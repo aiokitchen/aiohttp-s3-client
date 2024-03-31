@@ -43,10 +43,15 @@ def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
 
 
 def parse_list_objects(payload: bytes) -> Tuple[
-    List[AwsObjectMeta], Optional[str],
+    List[AwsObjectMeta], List[str], Optional[str],
 ]:
     root = ET.fromstring(payload)
     result = []
+    prefixes = [
+        el.text
+        for el in root.findall(f"{{{NS}}}CommonPrefixes/{{{NS}}}Prefix")
+        if el.text
+    ]
     for el in root.findall(f"{{{NS}}}Contents"):
         etag = key = last_modified = size = storage_class = None
         for child in el:
@@ -78,4 +83,4 @@ def parse_list_objects(payload: bytes) -> Tuple[
             result.append(meta)
     nct_el = root.find(f"{{{NS}}}NextContinuationToken")
     continuation_token = nct_el.text if nct_el is not None else None
-    return result, continuation_token
+    return result, prefixes, continuation_token

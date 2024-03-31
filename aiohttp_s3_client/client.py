@@ -739,7 +739,7 @@ class S3Client:
         delimiter: t.Optional[str] = None,
         max_keys: t.Optional[int] = None,
         start_after: t.Optional[str] = None,
-    ) -> t.AsyncIterator[t.List[AwsObjectMeta]]:
+    ) -> t.AsyncIterator[t.Tuple[t.List[AwsObjectMeta], t.List[str]]]:
         """
         List objects in bucket.
 
@@ -787,10 +787,10 @@ class S3Client:
                         ),
                     )
                 payload = await resp.read()
-                metadata, continuation_token = parse_list_objects(payload)
-                if not metadata:
+                metadata, prefixes, cont_token = parse_list_objects(payload)
+                if not metadata and not prefixes:
                     break
-                yield metadata
-                if not continuation_token:
+                yield metadata, prefixes
+                if not cont_token:
                     break
-                params["continuation-token"] = continuation_token
+                params["continuation-token"] = cont_token

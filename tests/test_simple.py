@@ -76,7 +76,7 @@ async def test_list_objects_v2(s3_client: S3Client, s3_read, tmp_path):
 
         # Test list file
         batch = 0
-        async for result in s3_client.list_objects_v2(
+        async for result, prefixes in s3_client.list_objects_v2(
             prefix="test/list/",
             delimiter="/",
             max_keys=1,
