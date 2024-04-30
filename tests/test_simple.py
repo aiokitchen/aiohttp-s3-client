@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from freezegun import freeze_time
 from yarl import URL
 
 from aiohttp_s3_client import S3Client
@@ -157,3 +158,20 @@ def test_presign_absolute_url(s3_client, method, given_url):
     assert presigned.host == url_object.host
     assert presigned.port == url_object.port
     assert presigned.path == url_object.path
+
+
+@freeze_time("2024-01-01")
+def test_presign_url(s3_client):
+    url = s3_client.presign_url('get', URL('./example'))
+    assert url.path == '/example'
+    assert url.query == {
+        'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+        'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD',
+        'X-Amz-Credential': 'user/20240101/us-east-1/s3/aws4_request',
+        'X-Amz-Date': '20240101T000000Z',
+        'X-Amz-Expires': '86400',
+        'X-Amz-SignedHeaders': 'host',
+        'X-Amz-Signature': (
+            '56721317f5ed477b6d2d46740f1a92996a207f17d494f159ea31158f01415ed3'
+        )
+    }
