@@ -78,7 +78,7 @@ async def test_list_objects_v2(s3_client: S3Client, s3_read, tmp_path):
 
         # Test list file
         batch = 0
-        async for result in s3_client.list_objects_v2(
+        async for result, prefixes in s3_client.list_objects_v2(
             prefix="test/list/",
             delimiter="/",
             max_keys=1,
@@ -86,6 +86,32 @@ async def test_list_objects_v2(s3_client: S3Client, s3_read, tmp_path):
             batch += 1
             assert result[0].key == f"test/list/test{batch}"
             assert result[0].size == len(data)
+
+
+async def test_list_objects_v2_prefix(s3_client: S3Client, s3_read, tmp_path):
+    data = b"hello, world"
+
+    with (tmp_path / "hello.txt").open("wb") as f:
+        f.write(data)
+        f.flush()
+
+        resp = await s3_client.put_file("/test2/list1/test1", f.name)
+        assert resp.status == HTTPStatus.OK
+
+        resp = await s3_client.put_file("/test2/list2/test2", f.name)
+        assert resp.status == HTTPStatus.OK
+
+        # Test list file
+        batch = 0
+
+        async for result, prefixes in s3_client.list_objects_v2(
+            prefix="test2/",
+            delimiter="/",
+        ):
+            batch += 1
+            assert len(result) == 0
+            assert prefixes[0] == "test2/list1/"
+            assert prefixes[1] == "test2/list2/"
 
 
 async def test_url_path_with_colon(s3_client: S3Client, s3_read):
