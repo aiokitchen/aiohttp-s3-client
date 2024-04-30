@@ -793,8 +793,7 @@ class S3Client:
                 yield metadata, prefixes
                 if not cont_token:
                     break
-
-                params["continuation-token"] = continuation_token
+                params["continuation-token"] = cont_token
 
     def presign_url(
         self,
