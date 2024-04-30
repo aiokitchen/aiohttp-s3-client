@@ -22,7 +22,7 @@ async def s3_client(event_loop, s3_url: URL):
 
 @pytest.fixture
 async def s3_url() -> URL:
-    return URL(os.getenv("S3_URL", "http://user:hackme@localhost:8000/"))
+    return URL(os.getenv("S3_URL", "http://user:hackme@localhost:9090/test"))
 
 
 @pytest.fixture

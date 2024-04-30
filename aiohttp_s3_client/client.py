@@ -535,7 +535,7 @@ class S3Client:
 
         log.debug(
             "All parts (#%d) of %s are uploaded to %s",
-            part_no - 1, upload_id, object_name,
+            part_no - 1, upload_id, object_name,  # type: ignore
         )
 
         # Parts should be in ascending order
