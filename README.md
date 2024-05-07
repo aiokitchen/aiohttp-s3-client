@@ -56,6 +56,9 @@ async with ClientSession(raise_for_status=True) as session:
     async with client.get("bucket/key") as resp:
         data = await resp.read()
 
+    # Make presigned URL
+    url = client.presign_url("GET", "bucket/key", expires=60 * 60)
+
     # Delete object using bucket+key
     async with client.delete("bucket/key") as resp:
         assert resp == HTTPStatus.NO_CONTENT
