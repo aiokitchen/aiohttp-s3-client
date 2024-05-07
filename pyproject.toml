@@ -86,3 +86,4 @@ skip = ".venv*,.*cache,dist"
 
 [tool.pylama.linter.mccabe]
 max-complexity = 15
+
