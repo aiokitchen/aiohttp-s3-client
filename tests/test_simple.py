@@ -202,12 +202,14 @@ def test_presign_url(s3_client, s3_url):
         )
     }
 
+
 def test_zero_file_upload_chunked(s3_client: S3Client, s3_url):
     s3_client._session = MagicMock(s3_client._session)
     s3_client.request("POST", "/blank", data=b"")
     assert s3_client._session.request.call_count == 1
     call = s3_client._session.request.mock_calls[-1]
     assert call.kwargs.get("chunked", True)
+
 
 def test_zero_file_upload_not_chunked(s3_client: S3Client, s3_url):
     s3_client._session = MagicMock(s3_client._session)

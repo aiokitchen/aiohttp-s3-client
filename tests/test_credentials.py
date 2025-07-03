@@ -5,7 +5,7 @@ from unittest import mock
 import pytest
 from aiohttp import web
 from pytest import FixtureRequest
-from pytest_aiohttp.plugin import TestServer
+from pytest_aiohttp.plugin import TestServer    # type: ignore[attr-defined]
 
 from aiohttp_s3_client.credentials import (
     AbstractCredentials, ConfigCredentials, EnvironmentCredentials,
@@ -259,9 +259,10 @@ async def test_metadata_credentials(
     server = TestServer(metadata_server_app)
     await server.start_server()
 
+
     class TestMetadataCredentials(MetadataCredentials):
         METADATA_ADDRESS = server.host
-        METADATA_PORT = server.port
+        METADATA_PORT = server.port    # type: ignore[assignment]
 
     credentials = TestMetadataCredentials()
     assert isinstance(credentials, AbstractCredentials)

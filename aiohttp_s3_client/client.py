@@ -541,7 +541,7 @@ class S3Client:
         # Parts should be in ascending order
         parts = sorted(results_queue, key=lambda x: x[0])
         await self._complete_multipart_upload(
-            upload_id, object_name, parts,
+            upload_id, str(object_name), parts,
         )
 
     async def _download_range(
@@ -698,7 +698,7 @@ class S3Client:
                             files.append(file)
                         else:
                             file = fp
-                        writer = partial(write_from_start, file)
+                        writer = partial(write_from_start, file)    # type: ignore
                     workers.append(
                         self._download_worker(
                             str(object_name),
