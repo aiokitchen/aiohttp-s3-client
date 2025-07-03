@@ -192,7 +192,7 @@ class S3Client:
             data_length = len(data)
 
         headers = self._prepare_headers(headers)
-        if data_length:
+        if data_length is not None and data_length >= 0:
             headers[hdrs.CONTENT_LENGTH] = str(data_length)
         elif data is not None:
             kwargs["chunked"] = True
