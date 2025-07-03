@@ -698,7 +698,9 @@ class S3Client:
                             files.append(file)
                         else:
                             file = fp
-                        writer = partial(write_from_start, file)    # type: ignore
+                        writer = partial(
+                            write_from_start, file  # type: ignore
+                        )
                     workers.append(
                         self._download_worker(
                             str(object_name),
