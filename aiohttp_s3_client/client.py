@@ -190,7 +190,10 @@ class S3Client:
 
         if kwargs.get("chunked"):
             if content_sha256:
-                log.warning("content_sha256 will be ignored because content is chunked")
+                log.warning(
+                    "content_sha256 will be ignored because "
+                    "content is chunked"
+                )
             # https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-auth-using-authorization-header.html
             content_sha256 = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 
