@@ -1,3 +1,4 @@
+import asyncio
 import gzip
 import sys
 from http import HTTPStatus
@@ -217,3 +218,19 @@ def test_zero_file_upload_not_chunked(s3_client: S3Client, s3_url):
     assert s3_client._session.request.call_count == 1
     call = s3_client._session.request.mock_calls[-1]
     assert call.kwargs.get("chunked", None) is None
+
+
+def test_chunked_and_signature(s3_client: S3Client, s3_url):
+    s3_client._session = MagicMock(s3_client._session)
+
+    async def gen():
+        await asyncio.sleep(0.0)
+        yield b""
+
+    s3_client.request("POST", "/blank", data=gen())
+    assert s3_client._session.request.call_count == 1
+    call = s3_client._session.request.mock_calls[-1]
+    assert call.kwargs.get("chunked") is True
+    headers = call.kwargs.get("headers")
+    trailer = 'STREAMING-UNSIGNED-PAYLOAD-TRAILER'
+    assert headers.get('x-amz-content-sha256') == trailer

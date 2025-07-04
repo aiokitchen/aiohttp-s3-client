@@ -3,7 +3,6 @@ import hashlib
 import io
 import logging
 import os
-import sys
 import typing as t
 from collections import deque
 from functools import partial
@@ -68,17 +67,9 @@ class AwsDownloadError(AwsError):
     pass
 
 
-if sys.version_info < (3, 8):
-    from contextlib import suppress
-
-    @threaded
-    def unlink_path(path: Path) -> None:
-        with suppress(FileNotFoundError):
-            os.unlink(path.resolve())
-else:
-    @threaded
-    def unlink_path(path: Path) -> None:
-        path.unlink(missing_ok=True)
+@threaded
+def unlink_path(path: Path) -> None:
+    path.unlink(missing_ok=True)
 
 
 @threaded
@@ -196,6 +187,15 @@ class S3Client:
             headers[hdrs.CONTENT_LENGTH] = str(data_length)
         elif data is not None:
             kwargs["chunked"] = True
+
+        if kwargs.get("chunked"):
+            if content_sha256:
+                log.warning(
+                    "content_sha256 will be ignored because "
+                    "content is chunked"
+                )
+            # https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-auth-using-authorization-header.html
+            content_sha256 = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
