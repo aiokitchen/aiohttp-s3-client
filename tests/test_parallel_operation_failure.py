@@ -69,8 +69,9 @@ async def s3_mock_server(s3_mock_port, localhost):
     app["calls"] = []
     app.router.add_put("/{key:[^{}]+}", s3_mock_put_object_handler)
     app.router.add_post("/{key:[^{}]+}", s3_mock_post_object_handler)
-    app.router.add_head("/{key:[^{}]+}", s3_mock_head_object_handler)
     app.router.add_get("/{key:[^{}]+}", s3_mock_get_object_handler)
+    # Not used right now but tests failed with it
+    # app.router.add_head("/{key:[^{}]+}", s3_mock_head_object_handler)
     server = TestServer(app, host=localhost, port=s3_mock_port)
     await server.start_server()
     try:

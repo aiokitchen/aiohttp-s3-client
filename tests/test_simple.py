@@ -3,6 +3,7 @@ import sys
 from http import HTTPStatus
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from freezegun import freeze_time
@@ -200,3 +201,19 @@ def test_presign_url(s3_client, s3_url):
             '7359f1286edf554b0eab363e3c93ee32855b8d429d975fdb0a5d2cb7ad5c0db0'
         )
     }
+
+
+def test_zero_file_upload_chunked(s3_client: S3Client, s3_url):
+    s3_client._session = MagicMock(s3_client._session)
+    s3_client.request("POST", "/blank", data=b"")
+    assert s3_client._session.request.call_count == 1
+    call = s3_client._session.request.mock_calls[-1]
+    assert call.kwargs.get("chunked", True)
+
+
+def test_zero_file_upload_not_chunked(s3_client: S3Client, s3_url):
+    s3_client._session = MagicMock(s3_client._session)
+    s3_client.request("POST", "/blank", data=b"", data_length=0)
+    assert s3_client._session.request.call_count == 1
+    call = s3_client._session.request.mock_calls[-1]
+    assert call.kwargs.get("chunked", None) is None

@@ -192,7 +192,7 @@ class S3Client:
             data_length = len(data)
 
         headers = self._prepare_headers(headers)
-        if data_length:
+        if data_length is not None and data_length >= 0:
             headers[hdrs.CONTENT_LENGTH] = str(data_length)
         elif data is not None:
             kwargs["chunked"] = True
@@ -541,7 +541,7 @@ class S3Client:
         # Parts should be in ascending order
         parts = sorted(results_queue, key=lambda x: x[0])
         await self._complete_multipart_upload(
-            upload_id, object_name, parts,
+            upload_id, str(object_name), parts,
         )
 
     async def _download_range(
@@ -698,7 +698,9 @@ class S3Client:
                             files.append(file)
                         else:
                             file = fp
-                        writer = partial(write_from_start, file)
+                        writer = partial(
+                            write_from_start, file  # type: ignore
+                        )
                     workers.append(
                         self._download_worker(
                             str(object_name),
