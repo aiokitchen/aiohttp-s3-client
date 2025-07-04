@@ -232,5 +232,5 @@ def test_chunked_and_signature(s3_client: S3Client, s3_url):
     call = s3_client._session.request.mock_calls[-1]
     assert call.kwargs.get("chunked") is True
     headers = call.kwargs.get("headers")
-    trealer = 'STREAMING-UNSIGNED-PAYLOAD-TRAILER'
-    assert headers.get('x-amz-content-sha256') == trealer
+    trailer = 'STREAMING-UNSIGNED-PAYLOAD-TRAILER'
+    assert headers.get('x-amz-content-sha256') == trailer
