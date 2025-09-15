@@ -63,6 +63,13 @@ async with ClientSession(raise_for_status=True) as session:
     async with client.delete("bucket/key") as resp:
         assert resp == HTTPStatus.NO_CONTENT
 
+    # Copy object (server-side) within/between buckets
+    async with client.copy("bucket/src.txt", "bucket/dst.txt") as resp:
+        assert resp.status == HTTPStatus.OK
+
+    # Rename (copy then delete source)
+    await client.rename("bucket/old-key", "bucket/new-key")
+
     # List objects by prefix
     async for result, prefixes in client.list_objects_v2("bucket/", prefix="prefix"):
         # Each result is a list of metadata objects representing an object
@@ -271,6 +278,13 @@ await client.put_file_multipart(
     },
     workers_count=8,
 )
+
+### Content-Type inference
+
+When uploading (including multipart initiation), if you do not provide a
+`Content-Type` header explicitly, the client infers it from the provided
+file path or object key using Python's `mimetypes` and falls back to
+`application/octet-stream`.
 ```
 
 ## Parallel download to file
