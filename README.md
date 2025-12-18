@@ -1,7 +1,7 @@
 aiohttp-s3-client
 ================
 
-[![PyPI - License](https://img.shields.io/pypi/l/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Wheel](https://img.shields.io/pypi/wheel/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Mypy](http://www.mypy-lang.org/static/mypy_badge.svg)]() [![PyPI](https://img.shields.io/pypi/v/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![PyPI](https://img.shields.io/pypi/pyversions/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Coverage Status](https://coveralls.io/repos/github/mosquito/aiohttp-s3-client/badge.svg?branch=master)](https://coveralls.io/github/mosquito/aiohttp-s3-client?branch=master) ![tox](https://github.com/mosquito/aiohttp-s3-client/workflows/tox/badge.svg?branch=master)
+[![PyPI - License](https://img.shields.io/pypi/l/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Wheel](https://img.shields.io/pypi/wheel/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Mypy](http://www.mypy-lang.org/static/mypy_badge.svg)]() [![PyPI](https://img.shields.io/pypi/v/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![PyPI](https://img.shields.io/pypi/pyversions/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Coverage Status](https://coveralls.io/repos/github/mosquito/aiohttp-s3-client/badge.svg?branch=master)](https://coveralls.io/github/mosquito/aiohttp-s3-client?branch=master) [![tests](https://github.com/aiokitchen/aiohttp-s3-client/actions/workflows/tests.yml/badge.svg)](https://github.com/aiokitchen/aiohttp-s3-client/actions/workflows/tests.yml)
 
 The simple module for putting and getting object from Amazon S3 compatible endpoints
 
@@ -295,4 +295,75 @@ await client.get_file_parallel(
     "/home/user/bigfile.csv",
     workers_count=8,
 )
+```
+
+### Manual multipart upload
+
+You can also manually control multipart upload process using `multipart_upload` method.
+It returns an async context manager which handles upload creation and completion.
+This method gives you more control over the upload process, for example you can
+specify part size, add custom metadata, or control concurrency.
+
+#### Important multipart restrictions and recommendations:
+
+- **Minimum part size: 5 MiB** (`5 * 1024 * 1024` bytes). Every part must be at least
+  5 MiB in size, except for the final part.
+- **Maximum number of parts: `10,000`.** The total number of uploaded parts must be
+  <= `10,000`.
+- Choosing a part size: **pick a part size that satisfies both constraints**.
+  A safe formula when you know the total object size is:
+  ```python
+  part_size = max(5 * 1024 * 1024, math.ceil(total_size / 10000))
+  ```
+- If you don't know the total size in advance, choose a conservative part size
+  (for example 8 MiB or 16 MiB) so you are unlikely to exceed 10,000 parts.
+- The uploader implements retries for failed part uploads; you should still
+  ensure parts (except the last) meet the 5 MiB minimum before uploading.
+
+The `put_part` method returns a coroutine — calling `put_part(...)` does not
+perform the network upload immediately, it registers the part (and its part
+number) and returns a coroutine which performs the actual upload when awaited.
+This lets you schedule uploads and then await them concurrently.
+
+Note: the coroutine returned by `put_part(...)` performs the actual network
+upload when awaited and the uploader will automatically retry failed part
+uploads according to its retry policy; awaiting the coroutine will run those
+retries for that part. You don't need to retry manually when using the
+returned coroutine — the uploader handles integrity checks and retrying.
+
+#### Important usage notes:
+
+- You **MUST** call `put_part(...)` in the logical part sequence so parts get the
+  correct part numbers (the uploader assigns part numbers in call order).
+- You **MAY** await the returned coroutines later and in any concurrency pattern you
+  like (for example with `asyncio.gather`), which enables concurrent part
+  uploads.
+
+#### Examples
+
+Create parts then upload them concurrently:
+
+```python
+import hashlib
+import aiohttp
+from aiohttp_s3_client import S3Client
+
+client = S3Client(url="http://your-s3-host", session=aiohttp.ClientSession())
+
+async with client.multipart_upload("test/video.mov") as uploader:
+    uploads = []
+
+    # Call put_part in the correct part sequence and collect coroutines.
+    # The uploader assigns part numbers in the order put_part is called.
+    for chunk in chunks:
+        uploads.append(
+            uploader.put_part(
+                chunk,
+                content_sha256=hashlib.sha256(chunk).hexdigest(),
+            )
+        )
+
+    # Now execute all part uploads concurrently. The uploader will handle
+    # retries and integrity checks for each part.
+    await asyncio.gather(*uploads)
 ```

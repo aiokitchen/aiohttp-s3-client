@@ -3,9 +3,9 @@ import hashlib
 import io
 import logging
 import os
+import threading
 import typing as t
-from collections import deque
-from functools import partial
+from functools import partial, cached_property
 from http import HTTPStatus
 from itertools import chain
 from mimetypes import guess_type
@@ -367,37 +367,13 @@ class S3Client:
                 )
             return resp.headers["Etag"].strip('"')
 
-    async def _part_uploader(
-        self,
-        upload_id: str,
-        object_name: str,
-        parts_queue: asyncio.Queue,
-        results_queue: deque,
-        part_upload_tries: int,
-        **kwargs,
-    ) -> None:
-        backoff = asyncbackoff(
-            None, None,
-            max_tries=part_upload_tries,
-            exceptions=(ClientError,),
-        )
+    @staticmethod
+    async def _part_uploader(parts_queue: asyncio.Queue) -> None:
         while True:
-            msg = await parts_queue.get()
-            if msg is DONE:
+            coro = await parts_queue.get()
+            if coro is DONE:
                 break
-            part_no, part_hash, part = msg
-            etag = await backoff(self._put_part)(
-                upload_id=upload_id,
-                object_name=object_name,
-                part_no=part_no,
-                data=part,
-                content_sha256=part_hash,
-                **kwargs,
-            )
-            log.debug(
-                "Etag for part %d of %s is %s", part_no, upload_id, etag,
-            )
-            results_queue.append((part_no, etag))
+            await coro
 
     async def put_file_multipart(
         self,
@@ -444,22 +420,25 @@ class S3Client:
             **kwargs,
         )
 
+    @staticmethod
     async def _parts_generator(
-        self, gen, workers_count: int, parts_queue: asyncio.Queue,
-    ) -> int:
-        part_no = 1
-        async with gen:
+        gen: t.AsyncIterable[t.Tuple[str, bytes]],
+        uploader: 'MultipartUploader',
+        queue: asyncio.Queue,
+        workers_count: int,
+    ) -> None:
+        async with gen:     # type: ignore
+            log.debug("Starting parts generator")
+            no = 1
             async for part_hash, part in gen:
-                log.debug(
-                    "Reading part %d (%d bytes)", part_no, len(part),
+                log.debug("Reading part %d (%d bytes)", no, len(part))
+                no += 1
+                await queue.put(
+                    uploader.put_part(part, content_sha256=part_hash)
                 )
-                await parts_queue.put((part_no, part_hash, part))
-                part_no += 1
 
         for _ in range(workers_count):
-            await parts_queue.put(DONE)
-
-        return part_no
+            await queue.put(DONE)
 
     async def put_multipart(
         self,
@@ -492,57 +471,34 @@ class S3Client:
             )
         max_size = max_size or workers_count
 
-        upload_id = await self._create_multipart_upload(
-            str(object_name),
+        async with MultipartUploader(
+            self,
+            object_name,
             headers=headers,
-        )
-        log.debug("Got upload id %s for %s", upload_id, object_name)
+            max_retries=part_upload_tries,
+            **kwargs,
+        ) as uploader:
+            parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
+            workers = [
+                asyncio.create_task(self._part_uploader(parts_queue))
+                for _ in range(workers_count)
+            ]
 
-        parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
-        results_queue: deque = deque()
-        workers = [
-            asyncio.create_task(
-                self._part_uploader(
-                    upload_id,
-                    str(object_name),
-                    parts_queue,
-                    results_queue,
-                    part_upload_tries,
-                    **kwargs,
-                ),
+            if calculate_content_sha256:
+                gen = gen_with_hash(data)
+            else:
+                gen = gen_without_hash(data)
+
+            parts_generator = asyncio.create_task(
+                self._parts_generator(gen, uploader, parts_queue, workers_count)
             )
-            for _ in range(workers_count)
-        ]
-
-        if calculate_content_sha256:
-            gen = gen_with_hash(data)
-        else:
-            gen = gen_without_hash(data)
-
-        parts_generator = asyncio.create_task(
-            self._parts_generator(gen, workers_count, parts_queue),
-        )
-        try:
-            part_no, *_ = await asyncio.gather(
-                parts_generator,
-                *workers,
-            )
-        except Exception:
-            for task in chain([parts_generator], workers):
-                if not task.done():
-                    task.cancel()
-            raise
-
-        log.debug(
-            "All parts (#%d) of %s are uploaded to %s",
-            part_no - 1, upload_id, object_name,  # type: ignore
-        )
-
-        # Parts should be in ascending order
-        parts = sorted(results_queue, key=lambda x: x[0])
-        await self._complete_multipart_upload(
-            upload_id, str(object_name), parts,
-        )
+            try:
+                part_no, *_ = await asyncio.gather(parts_generator, *workers)
+            except Exception:
+                for task in chain([parts_generator], workers):
+                    if not task.done():
+                        task.cancel()
+                raise
 
     async def _download_range(
         self,
@@ -828,3 +784,154 @@ class S3Client:
             content_hash=content_sha256,
             expires=expires
         ))
+
+    def multipart_upload(self, object_name: str) -> 'MultipartUploader':
+        """
+        Get S3MultipartUploader for object_name
+
+        object_name: key in s3
+        """
+        return MultipartUploader(self, str(object_name))
+
+
+class MultipartUploader:
+    def __init__(
+        self,
+        client: S3Client,
+        object_name: str | Path,
+        headers: t.Optional[HeadersType] = None,
+        max_retries: int = 3,
+        retry_when: t.Iterable[t.Type[Exception]] = (
+            AwsUploadError,
+            ClientError,
+            OSError,
+            asyncio.TimeoutError
+        ),
+    ):
+        self.__client = client
+        self._object_name = str(object_name)
+        self._headers = headers
+        self._upload_id: t.Optional[str] = None
+        self._part_no = 1
+        self._parts: t.Dict[int, t.Optional[str]] = {}
+        self._part_no_lock = threading.Lock()
+        self._retry_policy = asyncbackoff(
+            None, None, 0,
+            max_tries=max_retries, exceptions=tuple(retry_when),
+        )
+
+    async def _create(self):
+        async with self.__client.post(
+            self._object_name,
+            headers=self._headers,
+            params={"uploads": 1},
+            content_sha256=EMPTY_STR_HASH,
+        ) as resp:
+            payload = await resp.read()
+            if resp.status != HTTPStatus.OK:
+                raise AwsUploadError(
+                    resp,
+                    (
+                        f"Wrong status code {resp.status} from s3 "
+                        f"with message {payload.decode()}."
+                    ),
+                )
+            self._upload_id = parse_create_multipart_upload_id(payload)
+            log.debug(
+                "Got upload id %s for %s", self._upload_id, self._object_name
+            )
+
+    @cached_property
+    def create(self) -> t.Callable[..., t.Coroutine[t.Any, t.Any, None]]:
+        if self._upload_id is not None:
+            raise RuntimeError("Multipart upload already created")
+        return self._retry_policy(self._create)
+
+    async def _complete(self) -> None:
+        if self._upload_id is None:
+            raise RuntimeError("Multipart upload not created")
+
+        parts = []
+        for part_no in sorted(self._parts):
+            etag = self._parts[part_no]
+            if etag is None:
+                raise RuntimeError(f"Part {part_no} was not uploaded")
+            parts.append((part_no, etag))
+
+        complete_upload_request = create_complete_upload_request(parts)
+        async with self.__client.post(
+            self._object_name,
+            headers={"Content-Type": "text/xml"},
+            params={"uploadId": self._upload_id},
+            data=complete_upload_request,
+            content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
+        ) as resp:
+            if resp.status != HTTPStatus.OK:
+                payload = await resp.text()
+                raise AwsUploadError(
+                    resp,
+                    (
+                        f"Wrong status code {resp.status} from s3 "
+                        f"with message {payload}."
+                    ),
+                )
+
+    @cached_property
+    def complete(self) -> t.Callable[..., t.Coroutine[t.Any, t.Any, None]]:
+        return self._retry_policy(self._complete)
+
+    async def _part_uploader(
+        self,
+        part_no: int,
+        data: t.Union[bytes, str, t.AsyncIterable[bytes]],
+        content_sha256: str,
+        **kwargs
+    ) -> None:
+        if self._upload_id is None:
+            raise RuntimeError("Multipart upload not created")
+
+        async with self.__client.put(
+            self._object_name,
+            params={"partNumber": part_no, "uploadId": self._upload_id},
+            data=data,
+            content_sha256=content_sha256,
+            **kwargs,
+        ) as resp:
+            payload = await resp.text()
+            if resp.status != HTTPStatus.OK:
+                raise AwsUploadError(
+                    resp,
+                    (
+                        f"Wrong status code {resp.status} from s3 "
+                        f"with message {payload}."
+                    ),
+                )
+        self._parts[part_no] = resp.headers["Etag"].strip('"')
+
+    def put_part(
+        self,
+        data: t.Union[bytes, str, t.AsyncIterable[bytes]],
+        content_sha256: str,
+        **kwargs
+    ) -> t.Coroutine[None, None, None]:
+        if self._upload_id is None:
+            raise RuntimeError("Multipart upload not created")
+
+        # Force lock part number assignment, in normal usage this should not
+        # be a bottleneck
+        with self._part_no_lock:
+            part_no = self._part_no
+            self._part_no += 1
+            self._parts[part_no] = None
+
+        uploader = self._retry_policy(self._part_uploader)
+        return uploader(part_no, data, content_sha256, **kwargs)
+
+    async def __aenter__(self) -> 'MultipartUploader':
+        await self.create()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is not None:
+            return
+        await self.complete()
