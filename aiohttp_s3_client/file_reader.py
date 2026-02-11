@@ -128,9 +128,9 @@ class AbstractReader(ABC):
     ) -> "AbstractReader":
         instance = cls.__new__(cls)
         instance._fp = fp
-        instance._stat = os.fstat(fp.fileno())
         instance._compute_sha256 = compute_sha256
         fp.seek(0)
+        instance._stat = os.fstat(fp.fileno())
         return instance
 
 

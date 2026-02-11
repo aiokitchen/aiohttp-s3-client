@@ -269,6 +269,7 @@ async def test_metadata_credentials(
     server = TestServer(metadata_server_app)
     await server.start_server()
 
+    assert server.port is not None
     credentials = MetadataCredentials(host=server.host, port=server.port)
     assert isinstance(credentials, AbstractCredentials)
 
