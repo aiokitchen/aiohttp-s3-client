@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import io
 import logging
 import os
 import threading
@@ -11,14 +10,13 @@ from collections.abc import (
     Coroutine,
     Iterable,
 )
-from functools import cached_property, partial
-from typing import IO, Any
+from functools import cached_property
+from typing import Any
 from http import HTTPStatus
 from itertools import chain
 from mimetypes import guess_type
 from mmap import PAGESIZE
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
@@ -29,7 +27,7 @@ from aiohttp.client import (
     ClientResponse,
 )
 from aiohttp.client_exceptions import ClientError, ClientResponseError
-from aiomisc import asyncbackoff, threaded, threaded_iterable
+from aiomisc import asyncbackoff, threaded_iterable
 from aws_request_signer import UNSIGNED_PAYLOAD
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
@@ -38,6 +36,8 @@ from aiohttp_s3_client.credentials import (
     AbstractCredentials,
     collect_credentials,
 )
+from aiohttp_s3_client.file_reader import Reader
+from aiohttp_s3_client.file_writer import IOWriter, UnixWriter
 from aiohttp_s3_client.xml import (
     AwsObjectMeta,
     create_complete_upload_request,
@@ -78,47 +78,9 @@ class AwsDownloadError(AwsError):
     pass
 
 
-@threaded
-def unlink_path(path: Path) -> None:
-    path.unlink(missing_ok=True)
+async def unlink_path(path: Path) -> None:
+    await asyncio.to_thread(lambda: path.unlink(missing_ok=True))
 
-
-@threaded
-def concat_files(
-    target_file: Path,
-    files: list[IO[bytes]],
-    buffer_size: int,
-) -> None:
-    with target_file.open("ab") as fp:
-        for file in files:
-            file.seek(0)
-            while True:
-                chunk = file.read(buffer_size)
-                if not chunk:
-                    break
-                fp.write(chunk)
-            file.close()
-
-
-@threaded
-def write_from_start(
-    file: io.BytesIO,
-    chunk: bytes,
-    range_start: int,
-    pos: int,
-) -> None:
-    file.seek(pos - range_start)
-    file.write(chunk)
-
-
-@threaded
-def pwrite_absolute_pos(
-    fd: int,
-    chunk: bytes,
-    range_start: int,
-    pos: int,
-) -> None:
-    os.pwrite(fd, chunk, pos)
 
 
 @threaded_iterable_constrained  # type: ignore[arg-type]
@@ -393,25 +355,55 @@ class S3Client:
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
         """
+        if workers_count < 1:
+            raise ValueError(
+                f"Workers count should be > 0. Got {workers_count}",
+            )
+        max_size = max_size or workers_count
+
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
             file_path,
             object_name,
             part_size,
         )
-        await self.put_multipart(
-            object_name,
-            file_sender(
-                file_path,
-                chunk_size=part_size,
-            ),
-            headers=headers,
-            workers_count=workers_count,
-            max_size=max_size,
-            part_upload_tries=part_upload_tries,
-            calculate_content_sha256=calculate_content_sha256,
-            **kwargs,
-        )
+
+        async with (
+            Reader(file_path, compute_sha256=calculate_content_sha256) as reader,
+            MultipartUploader(
+                self, object_name, headers=headers,
+                max_retries=part_upload_tries, **kwargs,
+            ) as uploader,
+        ):
+            parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
+            workers = [
+                asyncio.create_task(self._part_uploader(parts_queue))
+                for _ in range(workers_count)
+            ]
+
+            async def feed_parts() -> None:
+                no = 1
+                for chunk_future in reader.chunked(size=part_size):
+                    chunk = await chunk_future
+                    sha = chunk.sha256 if calculate_content_sha256 else None
+                    log.debug(
+                        "Reading part %d (%d bytes)", no, len(chunk.data),
+                    )
+                    no += 1
+                    await parts_queue.put(
+                        uploader.put_part(chunk.data, content_sha256=sha),
+                    )
+                for _ in range(workers_count):
+                    await parts_queue.put(DONE)
+
+            feeder = asyncio.create_task(feed_parts())
+            try:
+                await asyncio.gather(feeder, *workers)
+            except Exception:
+                for task in chain([feeder], workers):
+                    if not task.done():
+                        task.cancel()
+                raise
 
     @staticmethod
     async def _parts_generator(
@@ -497,10 +489,9 @@ class S3Client:
     async def _download_range(
         self,
         object_name: str,
-        writer: Callable[[bytes, int, int], Coroutine],
+        writer: Callable[[bytes, int], Coroutine],
         *,
         etag: str,
-        range_start: int,
         req_range_start: int,
         req_range_end: int,
         buffer_size: int,
@@ -536,13 +527,13 @@ class S3Client:
                 chunk = await resp.content.read(buffer_size)
                 if not chunk:
                     break
-                await writer(chunk, range_start, pos)
+                await writer(chunk, pos)
                 pos += len(chunk)
 
     async def _download_worker(
         self,
         object_name: str,
-        writer: Callable[[bytes, int, int], Coroutine],
+        writer: Callable[[bytes, int], Coroutine],
         *,
         etag: str,
         range_step: int,
@@ -579,7 +570,6 @@ class S3Client:
                 object_name,
                 writer,
                 etag=etag,
-                range_start=range_start,
                 req_range_start=req_range_start,
                 req_range_end=req_range_end - 1,
                 buffer_size=buffer_size,
@@ -631,33 +621,20 @@ class S3Client:
                 file_size,
             )
 
+        WriterClass = UnixWriter if hasattr(os, "pwrite") else IOWriter
         workers = []
-        files: list[IO[bytes]] = []
         worker_range_size = file_size // workers_count
         range_end = 0
-        file: IO[bytes]
         try:
-            with file_path.open("w+b") as fp:
+            async with WriterClass(file_path, file_size) as writer:
                 for range_start in range(0, file_size, worker_range_size):
                     range_end += worker_range_size
                     if range_end > file_size:
                         range_end = file_size
-                    if hasattr(os, "pwrite"):
-                        writer = partial(pwrite_absolute_pos, fp.fileno())
-                    else:
-                        if range_start:
-                            file = NamedTemporaryFile(dir=file_path.parent)
-                            files.append(file)
-                        else:
-                            file = fp
-                        writer = partial(
-                            write_from_start,
-                            file,  # type: ignore
-                        )
                     workers.append(
                         self._download_worker(
                             str(object_name),
-                            writer,  # type: ignore
+                            writer.write,
                             buffer_size=buffer_size,
                             etag=etag,
                             headers=headers,
@@ -670,15 +647,6 @@ class S3Client:
                     )
 
                 await asyncio.gather(*workers)
-
-            if files:
-                # First part already in `file_path`
-                log.debug("Joining %d parts to %s", len(files) + 1, file_path)
-                await concat_files(
-                    file_path,
-                    files,
-                    buffer_size=buffer_size,
-                )
         except Exception:
             log.exception(
                 "Error on file download. Removing possibly incomplete file %s",
