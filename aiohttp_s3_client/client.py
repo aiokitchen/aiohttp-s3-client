@@ -11,12 +11,12 @@ from collections.abc import (
     Iterable,
 )
 from functools import cached_property
-from typing import Any
 from http import HTTPStatus
-from itertools import chain
 from mimetypes import guess_type
 from mmap import PAGESIZE
 from pathlib import Path
+from tempfile import TemporaryFile
+from typing import Awaitable, Any
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
@@ -27,7 +27,7 @@ from aiohttp.client import (
     ClientResponse,
 )
 from aiohttp.client_exceptions import ClientError, ClientResponseError
-from aiomisc import asyncbackoff, threaded_iterable
+from aiomisc import asyncbackoff
 from aws_request_signer import UNSIGNED_PAYLOAD
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
@@ -36,7 +36,7 @@ from aiohttp_s3_client.credentials import (
     AbstractCredentials,
     collect_credentials,
 )
-from aiohttp_s3_client.file_reader import Reader
+from aiohttp_s3_client.file_reader import Reader, ChunkFuture
 from aiohttp_s3_client.file_writer import IOWriter, UnixWriter
 from aiohttp_s3_client.xml import (
     AwsObjectMeta,
@@ -53,8 +53,6 @@ EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
 
 HeadersType = dict | CIMultiDict | CIMultiDictProxy
-
-threaded_iterable_constrained = threaded_iterable(max_size=2)
 
 
 class AwsError(ClientResponseError):
@@ -81,37 +79,6 @@ class AwsDownloadError(AwsError):
 async def unlink_path(path: Path) -> None:
     await asyncio.to_thread(lambda: path.unlink(missing_ok=True))
 
-
-
-@threaded_iterable_constrained  # type: ignore[arg-type]
-def gen_without_hash(
-    stream: Iterable[bytes],
-) -> Iterable[tuple[None, bytes]]:
-    for data in stream:
-        yield (None, data)
-
-
-@threaded_iterable_constrained  # type: ignore[arg-type]
-def gen_with_hash(
-    stream: Iterable[bytes],
-) -> Iterable[tuple[str, bytes]]:
-    for data in stream:
-        yield hashlib.sha256(data).hexdigest(), data
-
-
-def file_sender(
-    file_name: str | Path,
-    chunk_size: int = CHUNK_SIZE,
-) -> Iterable[bytes]:
-    with open(file_name, "rb") as fp:
-        while True:
-            data = fp.read(chunk_size)
-            if not data:
-                break
-            yield data
-
-
-async_file_sender: Any = threaded_iterable_constrained(file_sender)  # type: ignore[arg-type]
 
 DataType = bytes | str | AsyncIterable[bytes]
 ParamsType = dict[str, str] | None
@@ -271,7 +238,7 @@ class S3Client:
     ) -> RequestContextManager:
         return self.request("POST", object_name, data=data, **kwargs)
 
-    def put_file(
+    async def put_file(
         self,
         object_name: str | Path,
         file_path: str | Path,
@@ -279,19 +246,16 @@ class S3Client:
         headers: HeadersType | None = None,
         chunk_size: int = CHUNK_SIZE,
         content_sha256: str | None = None,
-    ) -> RequestContextManager:
-
-        headers = self._prepare_headers(headers, str(file_path))
-        return self.put(
-            str(object_name),
-            headers=headers,
-            data=async_file_sender(
-                file_path,
-                chunk_size=chunk_size,
-            ),
-            data_length=os.stat(file_path).st_size,
-            content_sha256=content_sha256,
-        )
+    ) -> ClientResponse:
+        async with Reader(file_path, compute_sha256=False) as reader:
+            headers = self._prepare_headers(headers, str(file_path))
+            return await self.put(
+                str(object_name),
+                headers=headers,
+                data=reader.read(chunk_size),
+                data_length=reader.stat.st_size,
+                content_sha256=content_sha256,
+            )
 
     async def _put_part(
         self,
@@ -336,7 +300,6 @@ class S3Client:
         headers: HeadersType | None = None,
         part_size: int = PART_SIZE,
         workers_count: int = 1,
-        max_size: int | None = None,
         part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
         **kwargs,
@@ -355,12 +318,6 @@ class S3Client:
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
         """
-        if workers_count < 1:
-            raise ValueError(
-                f"Workers count should be > 0. Got {workers_count}",
-            )
-        max_size = max_size or workers_count
-
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
             file_path,
@@ -375,35 +332,21 @@ class S3Client:
                 max_retries=part_upload_tries, **kwargs,
             ) as uploader,
         ):
-            parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
-            workers = [
-                asyncio.create_task(self._part_uploader(parts_queue))
-                for _ in range(workers_count)
-            ]
 
-            async def feed_parts() -> None:
-                no = 1
-                for chunk_future in reader.chunked(size=part_size):
-                    chunk = await chunk_future
-                    sha = chunk.sha256 if calculate_content_sha256 else None
-                    log.debug(
-                        "Reading part %d (%d bytes)", no, len(chunk.data),
-                    )
-                    no += 1
-                    await parts_queue.put(
-                        uploader.put_part(chunk.data, content_sha256=sha),
-                    )
-                for _ in range(workers_count):
-                    await parts_queue.put(DONE)
+            semaphore: asyncio.Semaphore | None = (
+                asyncio.Semaphore(workers_count) if workers_count > 1 else None
+            )
 
-            feeder = asyncio.create_task(feed_parts())
-            try:
-                await asyncio.gather(feeder, *workers)
-            except Exception:
-                for task in chain([feeder], workers):
-                    if not task.done():
-                        task.cancel()
-                raise
+            async def upload_part(task: Awaitable[Any]):
+                if semaphore is None:
+                    return await task
+                async with semaphore:
+                    return await task
+
+            tasks = []
+            for chunk_future in reader.chunked(size=part_size):
+                tasks.append(upload_part(uploader.put_part(chunk_future, "")))
+            await asyncio.gather(*tasks)
 
     @staticmethod
     async def _parts_generator(
@@ -412,15 +355,14 @@ class S3Client:
         queue: asyncio.Queue,
         workers_count: int,
     ) -> None:
-        async with gen:  # type: ignore
-            log.debug("Starting parts generator")
-            no = 1
-            async for part_hash, part in gen:
-                log.debug("Reading part %d (%d bytes)", no, len(part))
-                no += 1
-                await queue.put(
-                    uploader.put_part(part, content_sha256=part_hash)
-                )
+        log.debug("Starting parts generator")
+        no = 1
+        async for part_hash, part in gen:
+            log.debug("Reading part %d (%d bytes)", no, len(part))
+            no += 1
+            await queue.put(
+                uploader.put_part(part, content_sha256=part_hash)
+            )
 
         for _ in range(workers_count):
             await queue.put(DONE)
@@ -432,8 +374,8 @@ class S3Client:
         *,
         headers: HeadersType | None = None,
         workers_count: int = 1,
-        max_size: int | None = None,
         part_upload_tries: int = 3,
+        part_size: int = PART_SIZE,
         calculate_content_sha256: bool = True,
         **kwargs,
     ) -> None:
@@ -450,41 +392,34 @@ class S3Client:
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
         """
-        if workers_count < 1:
-            raise ValueError(
-                f"Workers count should be > 0. Got {workers_count}",
-            )
-        max_size = max_size or workers_count
 
-        async with MultipartUploader(
-            self,
-            object_name,
-            headers=headers,
-            max_retries=part_upload_tries,
-            **kwargs,
-        ) as uploader:
-            parts_queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
-            workers = [
-                asyncio.create_task(self._part_uploader(parts_queue))
-                for _ in range(workers_count)
-            ]
+        with TemporaryFile() as fp:
+            def place_temp_file():
+                for chunk in data:
+                    fp.write(chunk)
+            await asyncio.to_thread(place_temp_file)
 
-            gen: AsyncIterable[tuple[str | None, bytes]]
-            if calculate_content_sha256:
-                gen = gen_with_hash(data)
-            else:
-                gen = gen_without_hash(data)
+            async with (
+                Reader.from_fp(fp, compute_sha256=calculate_content_sha256) as reader,
+                MultipartUploader(
+                    self, object_name, headers=headers, max_retries=part_upload_tries, **kwargs
+                ) as uploader
+            ):
+                semaphore: asyncio.Semaphore | None = (
+                    asyncio.Semaphore(workers_count) if workers_count > 1 else None
+                )
 
-            parts_generator = asyncio.create_task(
-                self._parts_generator(gen, uploader, parts_queue, workers_count)
-            )
-            try:
-                part_no, *_ = await asyncio.gather(parts_generator, *workers)
-            except Exception:
-                for task in chain([parts_generator], workers):
-                    if not task.done():
-                        task.cancel()
-                raise
+                async def upload_part(task: Awaitable[Any]):
+                    if semaphore is None:
+                        return await task
+                    async with semaphore:
+                        return await task
+
+                tasks = []
+                for chunk_future in reader.chunked(size=part_size):
+                    tasks.append(upload_part(uploader.put_part(chunk_future, "")))
+
+                await asyncio.gather(*tasks)
 
     async def _download_range(
         self,
@@ -856,12 +791,22 @@ class MultipartUploader:
     async def _part_uploader(
         self,
         part_no: int,
-        data: bytes | str | AsyncIterable[bytes],
+        data: bytes | str | AsyncIterable[bytes] | ChunkFuture,
         content_sha256: str,
         **kwargs,
     ) -> None:
         if self._upload_id is None:
             raise RuntimeError("Multipart upload not created")
+
+        if isinstance(data, ChunkFuture):
+            result = await data
+            data = result.data
+            if content_sha256 and result.sha256 != content_sha256:
+                raise RuntimeError(
+                    f"Content sha256 mismatch: expected sha256={content_sha256}, "
+                    f"but chunk have sha256={result.sha256}"
+                )
+            content_sha256 = result.sha256
 
         async with self.__client.put(
             self._object_name,
@@ -883,7 +828,7 @@ class MultipartUploader:
 
     def put_part(
         self,
-        data: bytes | str | AsyncIterable[bytes],
+        data: bytes | str | AsyncIterable[bytes] | ChunkFuture,
         content_sha256: str,
         **kwargs,
     ) -> Coroutine[None, None, None]:
