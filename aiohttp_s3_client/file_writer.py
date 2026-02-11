@@ -61,6 +61,7 @@ class UnixWriter(AbstractWriter):
     concurrent writes to the same file from multiple threads or processes.
     But it is only available on Unix-like systems.
     """
+
     def _pwrite(self, data: bytes, offset: int) -> None:
         os.pwrite(self.fd, data, offset)
 
@@ -119,6 +120,9 @@ class IOWriter(AbstractWriter):
 Writer = UnixWriter if hasattr(os, "pwrite") else IOWriter
 
 __all__ = (
-    "AbstractWriter", "IOWriter", "UnixWriter",
-    "Writer", "WriteFuture",
+    "AbstractWriter",
+    "IOWriter",
+    "UnixWriter",
+    "Writer",
+    "WriteFuture",
 )

@@ -331,11 +331,13 @@ class S3Client:
                 compute_sha256=calculate_content_sha256,
             ) as reader,
             MultipartUploader(
-                self, object_name, headers=headers,
-                max_retries=part_upload_tries, **kwargs,
+                self,
+                object_name,
+                headers=headers,
+                max_retries=part_upload_tries,
+                **kwargs,
             ) as uploader,
         ):
-
             semaphore: asyncio.Semaphore | None = (
                 asyncio.Semaphore(workers_count) if workers_count > 1 else None
             )
@@ -367,9 +369,7 @@ class S3Client:
         async for part_hash, part in gen:
             log.debug("Reading part %d (%d bytes)", no, len(part))
             no += 1
-            await queue.put(
-                uploader.put_part(part, content_sha256=part_hash)
-            )
+            await queue.put(uploader.put_part(part, content_sha256=part_hash))
 
         for _ in range(workers_count):
             await queue.put(DONE)
@@ -401,9 +401,11 @@ class S3Client:
         """
 
         with TemporaryFile() as fp:
+
             def place_temp_file():
                 for chunk in data:
                     fp.write(chunk)
+
             await asyncio.to_thread(place_temp_file)
 
             async with (
@@ -412,15 +414,17 @@ class S3Client:
                     compute_sha256=calculate_content_sha256,
                 ) as reader,
                 MultipartUploader(
-                    self, object_name,
+                    self,
+                    object_name,
                     headers=headers,
                     max_retries=part_upload_tries,
                     **kwargs,
-                ) as uploader
+                ) as uploader,
             ):
                 semaphore: asyncio.Semaphore | None = (
                     asyncio.Semaphore(workers_count)
-                    if workers_count > 1 else None
+                    if workers_count > 1
+                    else None
                 )
 
                 async def upload_part(task: Awaitable[Any]):

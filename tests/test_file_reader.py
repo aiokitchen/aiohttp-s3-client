@@ -92,7 +92,8 @@ async def test_io_reader_reads_correctly(sample_file):
 
 
 @pytest.mark.skipif(
-    not hasattr(os, "pread"), reason="os.pread not available",
+    not hasattr(os, "pread"),
+    reason="os.pread not available",
 )
 async def test_unix_reader_reads_correctly(sample_file):
     data = sample_file.read_bytes()

@@ -54,7 +54,7 @@ async def test_writer_multiple_sequential_writes(target_file):
     data = b"ABCDEFGHIJKLMNOP"
     async with Writer(target_file, len(data)) as writer:
         for i in range(0, len(data), 4):
-            await writer.write(data[i:i + 4], i)
+            await writer.write(data[i : i + 4], i)
     assert target_file.read_bytes() == data
 
 
@@ -65,10 +65,12 @@ async def test_writer_concurrent_writes(target_file):
     chunks = [os.urandom(chunk_size) for _ in range(num_chunks)]
 
     async with Writer(target_file, file_size) as writer:
-        await asyncio.gather(*(
-            writer.write(chunks[i], i * chunk_size)
-            for i in range(num_chunks)
-        ))
+        await asyncio.gather(
+            *(
+                writer.write(chunks[i], i * chunk_size)
+                for i in range(num_chunks)
+            )
+        )
 
     content = target_file.read_bytes()
     assert content == b"".join(chunks)
@@ -102,16 +104,19 @@ async def test_io_writer_concurrent_writes(target_file):
     chunks = [os.urandom(chunk_size) for _ in range(num_chunks)]
 
     async with IOWriter(target_file, file_size) as writer:
-        await asyncio.gather(*(
-            writer.write(chunks[i], i * chunk_size)
-            for i in range(num_chunks)
-        ))
+        await asyncio.gather(
+            *(
+                writer.write(chunks[i], i * chunk_size)
+                for i in range(num_chunks)
+            )
+        )
 
     assert target_file.read_bytes() == b"".join(chunks)
 
 
 @pytest.mark.skipif(
-    not hasattr(os, "pwrite"), reason="os.pwrite not available",
+    not hasattr(os, "pwrite"),
+    reason="os.pwrite not available",
 )
 async def test_unix_writer_writes_correctly(target_file):
     data = b"UnixWriter test data"
@@ -121,7 +126,8 @@ async def test_unix_writer_writes_correctly(target_file):
 
 
 @pytest.mark.skipif(
-    not hasattr(os, "pwrite"), reason="os.pwrite not available",
+    not hasattr(os, "pwrite"),
+    reason="os.pwrite not available",
 )
 async def test_unix_writer_concurrent_writes(target_file):
     chunk_size = 100
@@ -130,9 +136,11 @@ async def test_unix_writer_concurrent_writes(target_file):
     chunks = [os.urandom(chunk_size) for _ in range(num_chunks)]
 
     async with UnixWriter(target_file, file_size) as writer:
-        await asyncio.gather(*(
-            writer.write(chunks[i], i * chunk_size)
-            for i in range(num_chunks)
-        ))
+        await asyncio.gather(
+            *(
+                writer.write(chunks[i], i * chunk_size)
+                for i in range(num_chunks)
+            )
+        )
 
     assert target_file.read_bytes() == b"".join(chunks)

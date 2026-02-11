@@ -243,7 +243,9 @@ class MetadataCredentials(AbstractCredentials):
         return self.is_started.is_set()
 
     def __init__(
-        self, *, service: str = "s3",
+        self,
+        *,
+        service: str = "s3",
         host: str = "",
         port: int = 0,
     ):

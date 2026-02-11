@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class Chunk:
     data: bytes
-    sha256: str = ''
+    sha256: str = ""
 
 
 class ChunkFuture(Awaitable[Chunk]):
@@ -100,7 +100,8 @@ class AbstractReader(ABC):
             size = (file_size + self.MAX_CHUNKS - 1) // self.MAX_CHUNKS
             log.debug(
                 "Adjusting chunk size to %d to avoid "
-                "exceeding maximum number of chunks", size,
+                "exceeding maximum number of chunks",
+                size,
             )
 
         while offset < file_size:
@@ -109,7 +110,8 @@ class AbstractReader(ABC):
             offset += chunk_size
 
     async def read(
-        self, chunk_size: int = DEFAULT_CHUNK_SIZE,
+        self,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
     ) -> AsyncIterator[bytes]:
         for chunk_future in self.chunked(chunk_size):
             chunk = await chunk_future
@@ -120,7 +122,9 @@ class AbstractReader(ABC):
 
     @classmethod
     def from_fp(
-        cls, fp: BinaryIO, compute_sha256: bool = True,
+        cls,
+        fp: BinaryIO,
+        compute_sha256: bool = True,
     ) -> "AbstractReader":
         instance = cls.__new__(cls)
         instance._fp = fp
@@ -136,6 +140,7 @@ class UnixReader(AbstractReader):
     allowing for concurrent reads without locking.
     Really efficient on not small chunks. POSIX specific.
     """
+
     def _pread(self, size: int, offset: int) -> Chunk:
         data = os.pread(self.fd, size, offset)
         if self._compute_sha256:
@@ -166,6 +171,10 @@ class IOReader(AbstractReader):
 Reader = UnixReader if hasattr(os, "pread") else IOReader
 
 __all__ = (
-    "AbstractReader", "Chunk", "ChunkFuture",
-    "IOReader", "Reader", "UnixReader",
+    "AbstractReader",
+    "Chunk",
+    "ChunkFuture",
+    "IOReader",
+    "Reader",
+    "UnixReader",
 )

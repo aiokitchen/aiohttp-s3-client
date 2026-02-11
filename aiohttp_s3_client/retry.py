@@ -37,7 +37,8 @@ class Retry:
             self._catch = exceptions
 
     def __call__(
-        self, func: Callable[P, Coroutine[Any, Any, T]],
+        self,
+        func: Callable[P, Coroutine[Any, Any, T]],
     ) -> Callable[P, Coroutine[Any, Any, T]]:
         max_tries = self._max_tries
         catch = self._catch
@@ -54,7 +55,10 @@ class Retry:
                     if attempt < max_tries:
                         log.debug(
                             "Retry %d/%d for %s after %r",
-                            attempt, max_tries, func.__name__, exc,
+                            attempt,
+                            max_tries,
+                            func.__name__,
+                            exc,
                         )
                         if pause > 0:
                             await asyncio.sleep(pause)

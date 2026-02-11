@@ -100,7 +100,9 @@ async def test_pause_delays_between_retries():
     loop = asyncio.get_event_loop()
     t0 = loop.time()
     result = await Retry(
-        max_tries=3, exceptions=(ValueError,), pause=0.1,
+        max_tries=3,
+        exceptions=(ValueError,),
+        pause=0.1,
     )(func)()
     elapsed = loop.time() - t0
 
@@ -130,7 +132,8 @@ async def test_max_tries_accepts_range():
         return "ok"
 
     result = await Retry(
-        max_tries=range(3), exceptions=(ValueError,),
+        max_tries=range(3),
+        exceptions=(ValueError,),
     )(func)()
     assert result == "ok"
     assert call_count == 3
