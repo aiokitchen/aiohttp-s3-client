@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 from unittest import mock
@@ -140,7 +141,7 @@ def metadata_server_app() -> web.Application:
         }
 
         """
-        last_updated = datetime.datetime.utcnow()
+        last_updated = datetime.datetime.now(datetime.UTC)
 
         if request.match_info["role"] != "pytest":
             raise web.HTTPNotFound()
@@ -279,15 +280,16 @@ async def test_metadata_credentials(
         print(credentials.signer)
 
     await credentials.start()
-    request.addfinalizer(credentials.stop)
+    try:
+        assert credentials
 
-    assert credentials
-
-    assert credentials.signer
-    assert credentials.signer.region == "us-east-99"
-    assert credentials.signer.access_key_id == "PYTESTACCESSKEYID"
-    assert credentials.signer.secret_access_key == "PYTESTACCESSKEYSECRET"
-    assert credentials.signer.session_token == "PYTESTACCESSTOKEN"
+        assert credentials.signer
+        assert credentials.signer.region == "us-east-99"
+        assert credentials.signer.access_key_id == "PYTESTACCESSKEYID"
+        assert credentials.signer.secret_access_key == "PYTESTACCESSKEYSECRET"
+        assert credentials.signer.session_token == "PYTESTACCESSTOKEN"
+    finally:
+        await asyncio.wait_for(credentials.stop(), timeout=5)
 
 
 async def test_merge_credentials():

@@ -269,7 +269,7 @@ class MetadataCredentials(AbstractCredentials):
                 try:
                     credentials, expires_at = await self._fetch_credentials()
                     self._signer = AwsRequestSigner(**credentials.as_dict())
-                    delta = expires_at - datetime.datetime.utcnow()
+                    delta = expires_at - datetime.datetime.now(datetime.UTC)
                     sleep_time = math.floor(delta.total_seconds() / 2)
                     self.is_started.set()
                 except Exception:
@@ -282,8 +282,14 @@ class MetadataCredentials(AbstractCredentials):
         await self.is_started.wait()
 
     async def stop(self, *_: Any) -> None:
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
         if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            await asyncio.gather(
+                *self._tasks, return_exceptions=True,
+            )
+            self._tasks.clear()
         await self.session.close()
 
     async def _fetch_credentials(
@@ -320,7 +326,7 @@ class MetadataCredentials(AbstractCredentials):
             datetime.datetime.strptime(
                 credentials["Expiration"],
                 "%Y-%m-%dT%H:%M:%SZ",
-            ),
+            ).replace(tzinfo=datetime.UTC),
         )
 
     @property
