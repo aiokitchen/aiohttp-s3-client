@@ -88,8 +88,8 @@ class IOWriter(AbstractWriter):
         with self._lock:
             self._parts.append((offset, tmp_path))
 
-    async def write(self, data: bytes, offset: int) -> WriteFuture:
-        return await asyncio.to_thread(self._write_to_tmp, data, offset)
+    def write(self, data: bytes, offset: int) -> WriteFuture:
+        return asyncio.to_thread(self._write_to_tmp, data, offset)
 
     def _assemble(self) -> None:
         self._parts.sort()

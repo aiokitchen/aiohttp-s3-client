@@ -14,7 +14,7 @@ T = TypeVar("T")
 class Retry:
     """Fixed-delay retry decorator for coroutine functions."""
 
-    __slots__ = ("_max_tries", "_exceptions", "_pause")
+    __slots__ = ("_max_tries", "_catch", "_pause")
 
     def __init__(
         self,
@@ -30,26 +30,27 @@ class Retry:
         if pause < 0:
             raise ValueError("pause must be >= 0")
         self._max_tries = max_tries
-        self._exceptions = exceptions
         self._pause = pause
+        if asyncio.TimeoutError not in exceptions:
+            self._catch = (*exceptions, asyncio.TimeoutError)
+        else:
+            self._catch = exceptions
 
     def __call__(
         self, func: Callable[P, Coroutine[Any, Any, T]],
     ) -> Callable[P, Coroutine[Any, Any, T]]:
         max_tries = self._max_tries
-        exceptions = self._exceptions
+        catch = self._catch
         pause = self._pause
 
         @functools.wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            last_exc: BaseException | None = None
             for attempt in range(1, max_tries + 1):
                 try:
                     return await func(*args, **kwargs)
                 except asyncio.CancelledError:
                     raise
-                except (*exceptions, asyncio.TimeoutError) as exc:
-                    last_exc = exc
+                except catch as exc:  # type: ignore[misc]
                     if attempt < max_tries:
                         log.debug(
                             "Retry %d/%d for %s after %r",
@@ -59,6 +60,6 @@ class Retry:
                             await asyncio.sleep(pause)
                     else:
                         raise
-            raise last_exc  # pragma: no cover
+            raise AssertionError("unreachable")
 
         return wrapper

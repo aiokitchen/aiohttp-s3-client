@@ -242,12 +242,16 @@ class MetadataCredentials(AbstractCredentials):
     def __bool__(self) -> bool:
         return self.is_started.is_set()
 
-    def __init__(self, *, service: str = "s3"):
+    def __init__(
+        self, *, service: str = "s3",
+        host: str = "",
+        port: int = 0,
+    ):
         self.session = aiohttp.ClientSession(
             base_url=URL.build(
                 scheme="http",
-                host=self.METADATA_ADDRESS,
-                port=self.METADATA_PORT,
+                host=host or self.METADATA_ADDRESS,
+                port=port or self.METADATA_PORT,
             ),
             headers={},
         )
