@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sys import intern
-from typing import List, NamedTuple, Optional, Tuple
+from typing import NamedTuple
 from xml.etree import ElementTree as ET
 
 
@@ -25,7 +25,7 @@ def parse_create_multipart_upload_id(payload: bytes) -> str:
     return uploadid_el.text
 
 
-def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
+def create_complete_upload_request(parts: list[tuple[int, str]]) -> bytes:
     ET.register_namespace("", NS)
     root = ET.Element(f"{{{NS}}}CompleteMultipartUpload")
 
@@ -42,8 +42,8 @@ def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
     )
 
 
-def parse_list_objects(payload: bytes) -> Tuple[
-    List[AwsObjectMeta], List[str], Optional[str],
+def parse_list_objects(payload: bytes) -> tuple[
+    list[AwsObjectMeta], list[str], str | None,
 ]:
     root = ET.fromstring(payload)
     result = []

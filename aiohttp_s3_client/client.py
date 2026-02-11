@@ -4,8 +4,9 @@ import io
 import logging
 import os
 import threading
-import typing as t
-from functools import partial, cached_property
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable
+from functools import cached_property, partial
+from typing import IO
 from http import HTTPStatus
 from itertools import chain
 from mimetypes import guess_type
@@ -41,7 +42,7 @@ DONE = object()
 EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
 
-HeadersType = t.Union[t.Dict, CIMultiDict, CIMultiDictProxy]
+HeadersType = dict | CIMultiDict | CIMultiDictProxy
 
 threaded_iterable_constrained = threaded_iterable(max_size=2)
 
@@ -74,7 +75,7 @@ def unlink_path(path: Path) -> None:
 
 @threaded
 def concat_files(
-    target_file: Path, files: t.List[t.IO[bytes]], buffer_size: int,
+    target_file: Path, files: list[IO[bytes]], buffer_size: int,
 ) -> None:
     with target_file.open("ab") as fp:
         for file in files:
@@ -104,23 +105,23 @@ def pwrite_absolute_pos(
 
 @threaded_iterable_constrained
 def gen_without_hash(
-    stream: t.Iterable[bytes],
-) -> t.Generator[t.Tuple[None, bytes], None, None]:
+    stream: Iterable[bytes],
+) -> Iterable[tuple[None, bytes]]:
     for data in stream:
         yield (None, data)
 
 
 @threaded_iterable_constrained
 def gen_with_hash(
-    stream: t.Iterable[bytes],
-) -> t.Generator[t.Tuple[str, bytes], None, None]:
+    stream: Iterable[bytes],
+) -> Iterable[tuple[str, bytes]]:
     for data in stream:
         yield hashlib.sha256(data).hexdigest(), data
 
 
 def file_sender(
-    file_name: t.Union[str, Path], chunk_size: int = CHUNK_SIZE,
-) -> t.Iterable[bytes]:
+    file_name: str | Path, chunk_size: int = CHUNK_SIZE,
+) -> Iterable[bytes]:
     with open(file_name, "rb") as fp:
         while True:
             data = fp.read(chunk_size)
@@ -131,18 +132,18 @@ def file_sender(
 
 async_file_sender = threaded_iterable_constrained(file_sender)
 
-DataType = t.Union[bytes, str, t.AsyncIterable[bytes]]
-ParamsType = t.Optional[t.Mapping[str, str]]
+DataType = bytes | str | AsyncIterable[bytes]
+ParamsType = dict[str, str] | None
 
 
 class S3Client:
     def __init__(
-        self, session: ClientSession, url: t.Union[URL, str],
-        secret_access_key: t.Optional[str] = None,
-        access_key_id: t.Optional[str] = None,
-        session_token: t.Optional[str] = None,
+        self, session: ClientSession, url: URL | str,
+        secret_access_key: str | None = None,
+        access_key_id: str | None = None,
+        session_token: str | None = None,
         region: str = "",
-        credentials: t.Optional[AbstractCredentials] = None,
+        credentials: AbstractCredentials | None = None,
     ):
         url = URL(url)
         if credentials is None:
@@ -169,11 +170,11 @@ class S3Client:
 
     def request(
         self, method: str, path: str,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         params: ParamsType = None,
-        data: t.Optional[DataType] = None,
-        data_length: t.Optional[int] = None,
-        content_sha256: t.Optional[str] = None,
+        data: DataType | None = None,
+        data_length: int | None = None,
+        content_sha256: str | None = None,
         **kwargs,
     ) -> RequestContextManager:
         if isinstance(data, bytes):
@@ -235,12 +236,12 @@ class S3Client:
         )
 
     @staticmethod
-    def _make_headers(headers: t.Optional[HeadersType]) -> CIMultiDict:
+    def _make_headers(headers: HeadersType | None) -> CIMultiDict:
         headers = CIMultiDict(headers or {})
         return headers
 
     def _prepare_headers(
-        self, headers: t.Optional[HeadersType],
+        self, headers: HeadersType | None,
         file_path: str = "",
     ) -> CIMultiDict:
         headers = self._make_headers(headers)
@@ -256,22 +257,22 @@ class S3Client:
 
     def put(
         self, object_name: str,
-        data: t.Union[bytes, str, t.AsyncIterable[bytes]], **kwargs,
+        data: bytes | str | AsyncIterable[bytes], **kwargs,
     ) -> RequestContextManager:
         return self.request("PUT", object_name, data=data, **kwargs)
 
     def post(
         self, object_name: str,
-        data: t.Union[None, bytes, str, t.AsyncIterable[bytes]] = None,
+        data: bytes | str | AsyncIterable[bytes] | None = None,
         **kwargs,
     ) -> RequestContextManager:
         return self.request("POST", object_name, data=data, **kwargs)
 
     def put_file(
-        self, object_name: t.Union[str, Path],
-        file_path: t.Union[str, Path],
-        *, headers: t.Optional[HeadersType] = None,
-        chunk_size: int = CHUNK_SIZE, content_sha256: t.Optional[str] = None,
+        self, object_name: str | Path,
+        file_path: str | Path,
+        *, headers: HeadersType | None = None,
+        chunk_size: int = CHUNK_SIZE, content_sha256: str | None = None,
     ) -> RequestContextManager:
 
         headers = self._prepare_headers(headers, str(file_path))
@@ -293,7 +294,7 @@ class S3Client:
     async def _create_multipart_upload(
         self,
         object_name: str,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
     ) -> str:
         async with self.post(
             object_name,
@@ -320,7 +321,7 @@ class S3Client:
         self,
         upload_id: str,
         object_name: str,
-        parts: t.List[t.Tuple[int, str]],
+        parts: list[tuple[int, str]],
     ) -> None:
         complete_upload_request = create_complete_upload_request(parts)
         async with self.post(
@@ -377,13 +378,13 @@ class S3Client:
 
     async def put_file_multipart(
         self,
-        object_name: t.Union[str, Path],
-        file_path: t.Union[str, Path],
+        object_name: str | Path,
+        file_path: str | Path,
         *,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         part_size: int = PART_SIZE,
         workers_count: int = 1,
-        max_size: t.Optional[int] = None,
+        max_size: int | None = None,
         part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
         **kwargs,
@@ -422,7 +423,7 @@ class S3Client:
 
     @staticmethod
     async def _parts_generator(
-        gen: t.AsyncIterable[t.Tuple[str, bytes]],
+        gen: AsyncIterable[tuple[str, bytes]],
         uploader: 'MultipartUploader',
         queue: asyncio.Queue,
         workers_count: int,
@@ -442,12 +443,12 @@ class S3Client:
 
     async def put_multipart(
         self,
-        object_name: t.Union[str, Path],
-        data: t.Iterable[bytes],
+        object_name: str | Path,
+        data: Iterable[bytes],
         *,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         workers_count: int = 1,
-        max_size: t.Optional[int] = None,
+        max_size: int | None = None,
         part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
         **kwargs,
@@ -503,14 +504,14 @@ class S3Client:
     async def _download_range(
         self,
         object_name: str,
-        writer: t.Callable[[bytes, int, int], t.Coroutine],
+        writer: Callable[[bytes, int, int], Coroutine],
         *,
         etag: str,
         range_start: int,
         req_range_start: int,
         req_range_end: int,
         buffer_size: int,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         **kwargs,
     ) -> None:
         """
@@ -548,7 +549,7 @@ class S3Client:
     async def _download_worker(
         self,
         object_name: str,
-        writer: t.Callable[[bytes, int, int], t.Coroutine],
+        writer: Callable[[bytes, int, int], Coroutine],
         *,
         etag: str,
         range_step: int,
@@ -556,7 +557,7 @@ class S3Client:
         range_end: int,
         buffer_size: int,
         range_get_tries: int = 3,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         **kwargs,
     ) -> None:
         """
@@ -593,10 +594,10 @@ class S3Client:
 
     async def get_file_parallel(
         self,
-        object_name: t.Union[str, Path],
-        file_path: t.Union[str, Path],
+        object_name: str | Path,
+        file_path: str | Path,
         *,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         range_step: int = PART_SIZE,
         workers_count: int = 1,
         range_get_tries: int = 3,
@@ -636,10 +637,10 @@ class S3Client:
             )
 
         workers = []
-        files: t.List[t.IO[bytes]] = []
+        files: list[IO[bytes]] = []
         worker_range_size = file_size // workers_count
         range_end = 0
-        file: t.IO[bytes]
+        file: IO[bytes]
         try:
             with file_path.open("w+b") as fp:
                 for range_start in range(0, file_size, worker_range_size):
@@ -690,14 +691,14 @@ class S3Client:
 
     async def list_objects_v2(
         self,
-        object_name: t.Union[str, Path] = "/",
+        object_name: str | Path = "/",
         *,
-        bucket: t.Optional[str] = None,
-        prefix: t.Optional[t.Union[str, Path]] = None,
-        delimiter: t.Optional[str] = None,
-        max_keys: t.Optional[int] = None,
-        start_after: t.Optional[str] = None,
-    ) -> t.AsyncIterator[t.Tuple[t.List[AwsObjectMeta], t.List[str]]]:
+        bucket: str | None = None,
+        prefix: str | Path | None = None,
+        delimiter: str | None = None,
+        max_keys: int | None = None,
+        start_after: str | None = None,
+    ) -> AsyncIterator[tuple[list[AwsObjectMeta], list[str]]]:
         """
         List objects in bucket.
 
@@ -756,9 +757,9 @@ class S3Client:
     def presign_url(
         self,
         method: str,
-        url: t.Union[str, URL],
-        headers: t.Optional[HeadersType] = None,
-        content_sha256: t.Optional[str] = None,
+        url: str | URL,
+        headers: HeadersType | None = None,
+        content_sha256: str | None = None,
         expires: int = 86400,
     ) -> URL:
         """
@@ -799,9 +800,9 @@ class MultipartUploader:
         self,
         client: S3Client,
         object_name: str | Path,
-        headers: t.Optional[HeadersType] = None,
+        headers: HeadersType | None = None,
         max_retries: int = 3,
-        retry_when: t.Iterable[t.Type[Exception]] = (
+        retry_when: Iterable[type[Exception]] = (
             AwsUploadError,
             ClientError,
             OSError,
@@ -811,9 +812,9 @@ class MultipartUploader:
         self.__client = client
         self._object_name = str(object_name)
         self._headers = headers
-        self._upload_id: t.Optional[str] = None
+        self._upload_id: str | None = None
         self._part_no = 1
-        self._parts: t.Dict[int, t.Optional[str]] = {}
+        self._parts: dict[int, str | None] = {}
         self._part_no_lock = threading.Lock()
         self._retry_policy = asyncbackoff(
             None, None, 0,
@@ -842,7 +843,7 @@ class MultipartUploader:
             )
 
     @cached_property
-    def create(self) -> t.Callable[..., t.Coroutine[t.Any, t.Any, None]]:
+    def create(self) -> Callable[..., Coroutine]:
         if self._upload_id is not None:
             raise RuntimeError("Multipart upload already created")
         return self._retry_policy(self._create)
@@ -877,13 +878,13 @@ class MultipartUploader:
                 )
 
     @cached_property
-    def complete(self) -> t.Callable[..., t.Coroutine[t.Any, t.Any, None]]:
+    def complete(self) -> Callable[..., Coroutine]:
         return self._retry_policy(self._complete)
 
     async def _part_uploader(
         self,
         part_no: int,
-        data: t.Union[bytes, str, t.AsyncIterable[bytes]],
+        data: bytes | str | AsyncIterable[bytes],
         content_sha256: str,
         **kwargs
     ) -> None:
@@ -910,10 +911,10 @@ class MultipartUploader:
 
     def put_part(
         self,
-        data: t.Union[bytes, str, t.AsyncIterable[bytes]],
+        data: bytes | str | AsyncIterable[bytes],
         content_sha256: str,
         **kwargs
-    ) -> t.Coroutine[None, None, None]:
+    ) -> Coroutine[None, None, None]:
         if self._upload_id is None:
             raise RuntimeError("Multipart upload not created")
 

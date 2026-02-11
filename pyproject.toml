@@ -1,6 +1,6 @@
 [project]
 name = "aiohttp-s3-client"
-version = "0.8.16"
+version = "1.0.0"
 description = "The simple module for putting and getting object from Amazon S3 compatible endpoints"
 authors = [
     { name = "Dmitry Orlov", email = "me@mosquito.su" },
