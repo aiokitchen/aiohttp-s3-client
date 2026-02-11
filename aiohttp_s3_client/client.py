@@ -4,9 +4,15 @@ import io
 import logging
 import os
 import threading
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterable,
+)
 from functools import cached_property, partial
-from typing import IO
+from typing import IO, Any
 from http import HTTPStatus
 from itertools import chain
 from mimetypes import guess_type
@@ -16,6 +22,7 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
+
 # noinspection PyProtectedMember
 from aiohttp.client import (
     _RequestContextManager as RequestContextManager,
@@ -28,16 +35,19 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from aiohttp_s3_client.credentials import (
-    AbstractCredentials, collect_credentials,
+    AbstractCredentials,
+    collect_credentials,
 )
 from aiohttp_s3_client.xml import (
-    AwsObjectMeta, create_complete_upload_request,
-    parse_create_multipart_upload_id, parse_list_objects,
+    AwsObjectMeta,
+    create_complete_upload_request,
+    parse_create_multipart_upload_id,
+    parse_list_objects,
 )
 
 log = logging.getLogger(__name__)
 
-CHUNK_SIZE = 2 ** 16
+CHUNK_SIZE = 2**16
 DONE = object()
 EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
@@ -75,7 +85,9 @@ def unlink_path(path: Path) -> None:
 
 @threaded
 def concat_files(
-    target_file: Path, files: list[IO[bytes]], buffer_size: int,
+    target_file: Path,
+    files: list[IO[bytes]],
+    buffer_size: int,
 ) -> None:
     with target_file.open("ab") as fp:
         for file in files:
@@ -90,7 +102,10 @@ def concat_files(
 
 @threaded
 def write_from_start(
-    file: io.BytesIO, chunk: bytes, range_start: int, pos: int,
+    file: io.BytesIO,
+    chunk: bytes,
+    range_start: int,
+    pos: int,
 ) -> None:
     file.seek(pos - range_start)
     file.write(chunk)
@@ -98,12 +113,15 @@ def write_from_start(
 
 @threaded
 def pwrite_absolute_pos(
-    fd: int, chunk: bytes, range_start: int, pos: int,
+    fd: int,
+    chunk: bytes,
+    range_start: int,
+    pos: int,
 ) -> None:
     os.pwrite(fd, chunk, pos)
 
 
-@threaded_iterable_constrained
+@threaded_iterable_constrained  # type: ignore[arg-type]
 def gen_without_hash(
     stream: Iterable[bytes],
 ) -> Iterable[tuple[None, bytes]]:
@@ -111,7 +129,7 @@ def gen_without_hash(
         yield (None, data)
 
 
-@threaded_iterable_constrained
+@threaded_iterable_constrained  # type: ignore[arg-type]
 def gen_with_hash(
     stream: Iterable[bytes],
 ) -> Iterable[tuple[str, bytes]]:
@@ -120,7 +138,8 @@ def gen_with_hash(
 
 
 def file_sender(
-    file_name: str | Path, chunk_size: int = CHUNK_SIZE,
+    file_name: str | Path,
+    chunk_size: int = CHUNK_SIZE,
 ) -> Iterable[bytes]:
     with open(file_name, "rb") as fp:
         while True:
@@ -130,7 +149,7 @@ def file_sender(
             yield data
 
 
-async_file_sender = threaded_iterable_constrained(file_sender)
+async_file_sender: Any = threaded_iterable_constrained(file_sender)  # type: ignore[arg-type]
 
 DataType = bytes | str | AsyncIterable[bytes]
 ParamsType = dict[str, str] | None
@@ -138,7 +157,9 @@ ParamsType = dict[str, str] | None
 
 class S3Client:
     def __init__(
-        self, session: ClientSession, url: URL | str,
+        self,
+        session: ClientSession,
+        url: URL | str,
         secret_access_key: str | None = None,
         access_key_id: str | None = None,
         session_token: str | None = None,
@@ -169,7 +190,9 @@ class S3Client:
         return self._url
 
     def request(
-        self, method: str, path: str,
+        self,
+        method: str,
+        path: str,
         headers: HeadersType | None = None,
         params: ParamsType = None,
         data: DataType | None = None,
@@ -192,8 +215,7 @@ class S3Client:
         if kwargs.get("chunked"):
             if content_sha256:
                 log.warning(
-                    "content_sha256 will be ignored because "
-                    "content is chunked"
+                    "content_sha256 will be ignored because content is chunked"
                 )
             # https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-auth-using-authorization-header.html
             content_sha256 = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
@@ -201,38 +223,53 @@ class S3Client:
         if data is not None and content_sha256 is None:
             content_sha256 = UNSIGNED_PAYLOAD
 
-        url = (self._url / path.lstrip("/"))
+        url = self._url / path.lstrip("/")
         url = url.with_path(quote(url.path), encoded=True).with_query(params)
 
         headers = self._make_headers(headers)
         headers.extend(
             self._credentials.signer.sign_with_headers(
-                method, str(url), headers=headers, content_hash=content_sha256,
+                method,
+                str(url),
+                headers=headers,
+                content_hash=content_sha256,
             ),
         )
         return self._session.request(
-            method, url, headers=headers, data=data, **kwargs,
+            method,
+            url,
+            headers=headers,
+            data=data,
+            **kwargs,
         )
 
     def get(self, object_name: str, **kwargs) -> RequestContextManager:
         return self.request("GET", object_name, **kwargs)
 
     def head(
-        self, object_name: str,
+        self,
+        object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs,
     ) -> RequestContextManager:
         return self.request(
-            "HEAD", object_name, content_sha256=content_sha256, **kwargs,
+            "HEAD",
+            object_name,
+            content_sha256=content_sha256,
+            **kwargs,
         )
 
     def delete(
-        self, object_name: str,
+        self,
+        object_name: str,
         content_sha256=EMPTY_STR_HASH,
         **kwargs,
     ) -> RequestContextManager:
         return self.request(
-            "DELETE", object_name, content_sha256=content_sha256, **kwargs,
+            "DELETE",
+            object_name,
+            content_sha256=content_sha256,
+            **kwargs,
         )
 
     @staticmethod
@@ -241,7 +278,8 @@ class S3Client:
         return headers
 
     def _prepare_headers(
-        self, headers: HeadersType | None,
+        self,
+        headers: HeadersType | None,
         file_path: str = "",
     ) -> CIMultiDict:
         headers = self._make_headers(headers)
@@ -256,23 +294,29 @@ class S3Client:
         return headers
 
     def put(
-        self, object_name: str,
-        data: bytes | str | AsyncIterable[bytes], **kwargs,
+        self,
+        object_name: str,
+        data: bytes | str | AsyncIterable[bytes],
+        **kwargs,
     ) -> RequestContextManager:
         return self.request("PUT", object_name, data=data, **kwargs)
 
     def post(
-        self, object_name: str,
+        self,
+        object_name: str,
         data: bytes | str | AsyncIterable[bytes] | None = None,
         **kwargs,
     ) -> RequestContextManager:
         return self.request("POST", object_name, data=data, **kwargs)
 
     def put_file(
-        self, object_name: str | Path,
+        self,
+        object_name: str | Path,
         file_path: str | Path,
-        *, headers: HeadersType | None = None,
-        chunk_size: int = CHUNK_SIZE, content_sha256: str | None = None,
+        *,
+        headers: HeadersType | None = None,
+        chunk_size: int = CHUNK_SIZE,
+        content_sha256: str | None = None,
     ) -> RequestContextManager:
 
         headers = self._prepare_headers(headers, str(file_path))
@@ -288,8 +332,11 @@ class S3Client:
         )
 
     @asyncbackoff(
-        None, None, 0,
-        max_tries=3, exceptions=(ClientError,),
+        None,
+        None,
+        0,
+        max_tries=3,
+        exceptions=(ClientError,),
     )
     async def _create_multipart_upload(
         self,
@@ -314,8 +361,11 @@ class S3Client:
             return parse_create_multipart_upload_id(payload)
 
     @asyncbackoff(
-        None, None, 0,
-        max_tries=3, exceptions=(AwsUploadError, ClientError),
+        None,
+        None,
+        0,
+        max_tries=3,
+        exceptions=(AwsUploadError, ClientError),
     )
     async def _complete_multipart_upload(
         self,
@@ -405,7 +455,9 @@ class S3Client:
         """
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
-            file_path, object_name, part_size,
+            file_path,
+            object_name,
+            part_size,
         )
         await self.put_multipart(
             object_name,
@@ -424,11 +476,11 @@ class S3Client:
     @staticmethod
     async def _parts_generator(
         gen: AsyncIterable[tuple[str, bytes]],
-        uploader: 'MultipartUploader',
+        uploader: "MultipartUploader",
         queue: asyncio.Queue,
         workers_count: int,
     ) -> None:
-        async with gen:     # type: ignore
+        async with gen:  # type: ignore
             log.debug("Starting parts generator")
             no = 1
             async for part_hash, part in gen:
@@ -485,6 +537,7 @@ class S3Client:
                 for _ in range(workers_count)
             ]
 
+            gen: AsyncIterable[tuple[str | None, bytes]]
             if calculate_content_sha256:
                 gen = gen_with_hash(data)
             else:
@@ -571,7 +624,8 @@ class S3Client:
             range_end,
         )
         backoff = asyncbackoff(
-            None, None,
+            None,
+            None,
             max_tries=range_get_tries,
             exceptions=(ClientError,),
         )
@@ -656,7 +710,8 @@ class S3Client:
                         else:
                             file = fp
                         writer = partial(
-                            write_from_start, file  # type: ignore
+                            write_from_start,
+                            file,  # type: ignore
                         )
                     workers.append(
                         self._download_worker(
@@ -679,7 +734,9 @@ class S3Client:
                 # First part already in `file_path`
                 log.debug("Joining %d parts to %s", len(files) + 1, file_path)
                 await concat_files(
-                    file_path, files, buffer_size=buffer_size,
+                    file_path,
+                    files,
+                    buffer_size=buffer_size,
                 )
         except Exception:
             log.exception(
@@ -778,15 +835,17 @@ class S3Client:
         if not _url.is_absolute():
             _url = self._url / str(_url)
 
-        return URL(self._credentials.signer.presign_url(
-            method=method.upper(),
-            url=str(_url),
-            headers=headers,
-            content_hash=content_sha256,
-            expires=expires
-        ))
+        return URL(
+            self._credentials.signer.presign_url(
+                method=method.upper(),
+                url=str(_url),
+                headers=headers,
+                content_hash=content_sha256,
+                expires=expires,
+            )
+        )
 
-    def multipart_upload(self, object_name: str) -> 'MultipartUploader':
+    def multipart_upload(self, object_name: str) -> "MultipartUploader":
         """
         Get S3MultipartUploader for object_name
 
@@ -806,7 +865,7 @@ class MultipartUploader:
             AwsUploadError,
             ClientError,
             OSError,
-            asyncio.TimeoutError
+            asyncio.TimeoutError,
         ),
     ):
         self.__client = client
@@ -817,8 +876,11 @@ class MultipartUploader:
         self._parts: dict[int, str | None] = {}
         self._part_no_lock = threading.Lock()
         self._retry_policy = asyncbackoff(
-            None, None, 0,
-            max_tries=max_retries, exceptions=tuple(retry_when),
+            None,
+            None,
+            0,
+            max_tries=max_retries,
+            exceptions=tuple(retry_when),
         )
 
     async def _create(self):
@@ -886,7 +948,7 @@ class MultipartUploader:
         part_no: int,
         data: bytes | str | AsyncIterable[bytes],
         content_sha256: str,
-        **kwargs
+        **kwargs,
     ) -> None:
         if self._upload_id is None:
             raise RuntimeError("Multipart upload not created")
@@ -913,7 +975,7 @@ class MultipartUploader:
         self,
         data: bytes | str | AsyncIterable[bytes],
         content_sha256: str,
-        **kwargs
+        **kwargs,
     ) -> Coroutine[None, None, None]:
         if self._upload_id is None:
             raise RuntimeError("Multipart upload not created")
@@ -928,7 +990,7 @@ class MultipartUploader:
         uploader = self._retry_policy(self._part_uploader)
         return uploader(part_no, data, content_sha256, **kwargs)
 
-    async def __aenter__(self) -> 'MultipartUploader':
+    async def __aenter__(self) -> "MultipartUploader":
         await self.create()
         return self
 

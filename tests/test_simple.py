@@ -133,7 +133,9 @@ async def test_put_compression(s3_client: S3Client, s3_read, object_name):
 
     data = b"hello, world"
     resp = await s3_client.put(
-        object_name, async_iterable(data), compress="gzip",
+        object_name,
+        async_iterable(data),
+        compress="gzip",
     )
     assert resp.status == HTTPStatus.OK
 
@@ -144,38 +146,39 @@ async def test_put_compression(s3_client: S3Client, s3_read, object_name):
     assert actual == data
 
 
-@pytest.mark.parametrize('method,given_url', [
-    # Simple test
-    ('GET', 'test/object'),
-
-    # Check method name is ok in lowercase
-    ('get', 'test/object'),
-
-    # Absolute path
-    ('GET', '/test/object'),
-
-    # Check URL object with path is given
-    ('get', URL('./test/object')),
-
-    # Check URL object with path is given
-    ('get', URL('/test/object')),
-])
+@pytest.mark.parametrize(
+    "method,given_url",
+    [
+        # Simple test
+        ("GET", "test/object"),
+        # Check method name is ok in lowercase
+        ("get", "test/object"),
+        # Absolute path
+        ("GET", "/test/object"),
+        # Check URL object with path is given
+        ("get", URL("./test/object")),
+        # Check URL object with path is given
+        ("get", URL("/test/object")),
+    ],
+)
 def test_presign_non_absolute_url(s3_client, s3_url, method, given_url):
-    presigned = s3_client.presign_url('get', 'test/object')
+    presigned = s3_client.presign_url("get", "test/object")
     assert presigned.is_absolute()
     assert presigned.scheme == s3_url.scheme
     assert presigned.host == s3_url.host
     assert presigned.port == s3_url.port
-    assert presigned.path == (s3_url / str(given_url).lstrip('/')).path
+    assert presigned.path == (s3_url / str(given_url).lstrip("/")).path
 
 
-@pytest.mark.parametrize('method,given_url', [
-    # String url
-    ('GET', 'https://absolute-url:123/path'),
-
-    # URL object
-    ('GET', URL('https://absolute-url:123/path')),
-])
+@pytest.mark.parametrize(
+    "method,given_url",
+    [
+        # String url
+        ("GET", "https://absolute-url:123/path"),
+        # URL object
+        ("GET", URL("https://absolute-url:123/path")),
+    ],
+)
 def test_presign_absolute_url(s3_client, method, given_url):
     presigned = s3_client.presign_url(method, given_url)
     assert presigned.is_absolute()
@@ -189,18 +192,18 @@ def test_presign_absolute_url(s3_client, method, given_url):
 
 @freeze_time("2024-01-01")
 def test_presign_url(s3_client, s3_url):
-    url = s3_client.presign_url('get', URL('./example'))
-    assert url.path == (s3_url / 'example').path
+    url = s3_client.presign_url("get", URL("./example"))
+    assert url.path == (s3_url / "example").path
     assert url.query == {
-        'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-        'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD',
-        'X-Amz-Credential': 'user/20240101/us-east-1/s3/aws4_request',
-        'X-Amz-Date': '20240101T000000Z',
-        'X-Amz-Expires': '86400',
-        'X-Amz-SignedHeaders': 'host',
-        'X-Amz-Signature': (
-            '7359f1286edf554b0eab363e3c93ee32855b8d429d975fdb0a5d2cb7ad5c0db0'
-        )
+        "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+        "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+        "X-Amz-Credential": "user/20240101/us-east-1/s3/aws4_request",
+        "X-Amz-Date": "20240101T000000Z",
+        "X-Amz-Expires": "86400",
+        "X-Amz-SignedHeaders": "host",
+        "X-Amz-Signature": (
+            "7359f1286edf554b0eab363e3c93ee32855b8d429d975fdb0a5d2cb7ad5c0db0"
+        ),
     }
 
 
@@ -232,5 +235,5 @@ def test_chunked_and_signature(s3_client: S3Client, s3_url):
     call = s3_client._session.request.mock_calls[-1]
     assert call.kwargs.get("chunked") is True
     headers = call.kwargs.get("headers")
-    trailer = 'STREAMING-UNSIGNED-PAYLOAD-TRAILER'
-    assert headers.get('x-amz-content-sha256') == trailer
+    trailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+    assert headers.get("x-amz-content-sha256") == trailer

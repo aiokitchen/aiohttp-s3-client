@@ -21,13 +21,11 @@ log = logging.getLogger(__name__)
 
 class AbstractCredentials(ABC):
     @abstractmethod
-    def __bool__(self) -> bool:
-        ...
+    def __bool__(self) -> bool: ...
 
     @property
     @abstractmethod
-    def signer(self) -> AwsRequestSigner:
-        ...
+    def signer(self) -> AwsRequestSigner: ...
 
 
 @dataclass(frozen=True)
@@ -45,7 +43,7 @@ class StaticCredentials(AbstractCredentials):
         return (
             f"{self.__class__.__name__}(access_key_id={self.access_key_id!r}, "
             "secret_access_key="
-            f'{"******" if self.secret_access_key else None!r}, '
+            f"{'******' if self.secret_access_key else None!r}, "
             f"region={self.region!r}, service={self.service!r})"
         )
 
@@ -65,13 +63,18 @@ class StaticCredentials(AbstractCredentials):
 
 class URLCredentials(StaticCredentials):
     def __init__(
-        self, url: str | URL, *, region: str = "", service: str = "s3",
+        self,
+        url: str | URL,
+        *,
+        region: str = "",
+        service: str = "s3",
     ):
         url = URL(url)
         super().__init__(
             access_key_id=url.user or "",
             secret_access_key=url.password or "",
-            region=region, service=service,
+            region=region,
+            service=service,
         )
 
 
@@ -104,8 +107,11 @@ class ConfigCredentials(StaticCredentials):
     def __init__(
         self,
         credentials_path: str | Path | None = None,
-        config_path: str | Path | None = DEFAULT_CONFIG_PATH, *,
-        region: str = "", service: str = "s3", profile: str = "auto",
+        config_path: str | Path | None = DEFAULT_CONFIG_PATH,
+        *,
+        region: str = "",
+        service: str = "s3",
+        profile: str = "auto",
     ):
         if credentials_path is None:
             credentials_path = Path(
@@ -160,8 +166,11 @@ ENVIRONMENT_CREDENTIALS = EnvironmentCredentials()
 def merge_credentials(*credentials: StaticCredentials) -> StaticCredentials:
     result = {}
     fields = (
-        "access_key_id", "secret_access_key",
-        "session_token", "region", "service",
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "region",
+        "service",
     )
 
     for candidate in credentials:
@@ -177,7 +186,9 @@ def merge_credentials(*credentials: StaticCredentials) -> StaticCredentials:
 
 
 def collect_credentials(
-    *, url: URL | None = None, **kwargs,
+    *,
+    url: URL | None = None,
+    **kwargs,
 ) -> StaticCredentials:
     credentials: list[StaticCredentials] = []
     if kwargs:
@@ -211,6 +222,7 @@ class MetadataDocument(TypedDict, total=False):
           "version" : "2017-09-30"
         }
     """
+
     region: str
 
 
@@ -275,7 +287,8 @@ class MetadataCredentials(AbstractCredentials):
             "/latest/dynamic/instance-identity/document",
         ) as response:
             document: MetadataDocument = await response.json(
-                content_type=None, encoding="utf-8",
+                content_type=None,
+                encoding="utf-8",
             )
 
         async with self.session.get(
@@ -287,7 +300,8 @@ class MetadataCredentials(AbstractCredentials):
             f"/latest/meta-data/iam/security-credentials/{iam_role}",
         ) as response:
             credentials: MetadataSecurityCredentials = await response.json(
-                content_type=None, encoding="utf-8",
+                content_type=None,
+                encoding="utf-8",
             )
 
         return (
