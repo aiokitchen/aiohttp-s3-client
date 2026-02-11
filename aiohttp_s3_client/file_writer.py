@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
@@ -54,6 +55,12 @@ class AbstractWriter(ABC):
 
 
 class UnixWriter(AbstractWriter):
+    """
+    Writer implementation using os.pwrite, which allows writing to a file at a
+    specific offset without changing the file pointer. Really efficient for
+    concurrent writes to the same file from multiple threads or processes.
+    But it is only available on Unix-like systems.
+    """
     def _pwrite(self, data: bytes, offset: int) -> None:
         os.pwrite(self.fd, data, offset)
 
@@ -62,17 +69,51 @@ class UnixWriter(AbstractWriter):
 
 
 class IOWriter(AbstractWriter):
+    ASSEMBLE_CHUNK_SIZE = 1024 * 1024
+
     def __init__(self, path: str | Path, file_size: int) -> None:
         super().__init__(path, file_size)
+        self._tmp_dir: tempfile.TemporaryDirectory[str] | None = None
+        self._parts: list[tuple[int, str]] = []
         self._lock = threading.Lock()
 
-    def _locked_write(self, data: bytes, offset: int) -> None:
-        with self._lock:
-            os.lseek(self.fd, offset, os.SEEK_SET)
-            os.write(self.fd, data)
+    def _sync_open(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory(dir=Path(self._path).parent)
 
-    def write(self, data: bytes, offset: int) -> WriteFuture:
-        return asyncio.to_thread(self._locked_write, data, offset)
+    def _write_to_tmp(self, data: bytes, offset: int) -> None:
+        assert self._tmp_dir is not None
+        tmp_path = os.path.join(self._tmp_dir.name, f"{offset:020d}")
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        with self._lock:
+            self._parts.append((offset, tmp_path))
+
+    async def write(self, data: bytes, offset: int) -> WriteFuture:
+        return await asyncio.to_thread(self._write_to_tmp, data, offset)
+
+    def _assemble(self) -> None:
+        self._parts.sort()
+        with open(self._path, "wb") as out:
+            out.truncate(self._file_size)
+            for offset, tmp_path in self._parts:
+                out.seek(offset)
+                with open(tmp_path, "rb") as part:
+                    while chunk := part.read(self.ASSEMBLE_CHUNK_SIZE):
+                        out.write(chunk)
+
+    def close(self) -> None:
+        if self._tmp_dir is not None:
+            self._assemble()
+            self._tmp_dir.cleanup()
+            self._tmp_dir = None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        await asyncio.to_thread(self.close)
 
 
 Writer = UnixWriter if hasattr(os, "pwrite") else IOWriter

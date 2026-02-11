@@ -131,6 +131,11 @@ class AbstractReader(ABC):
 
 
 class UnixReader(AbstractReader):
+    """
+    Uses os.pread to read file chunks without changing the file pointer,
+    allowing for concurrent reads without locking.
+    Really efficient on not small chunks. POSIX specific.
+    """
     def _pread(self, size: int, offset: int) -> Chunk:
         data = os.pread(self.fd, size, offset)
         if self._compute_sha256:
