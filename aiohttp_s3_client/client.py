@@ -331,66 +331,6 @@ class S3Client:
             content_sha256=content_sha256,
         )
 
-    @asyncbackoff(
-        None,
-        None,
-        0,
-        max_tries=3,
-        exceptions=(ClientError,),
-    )
-    async def _create_multipart_upload(
-        self,
-        object_name: str,
-        headers: HeadersType | None = None,
-    ) -> str:
-        async with self.post(
-            object_name,
-            headers=headers,
-            params={"uploads": 1},
-            content_sha256=EMPTY_STR_HASH,
-        ) as resp:
-            payload = await resp.read()
-            if resp.status != HTTPStatus.OK:
-                raise AwsUploadError(
-                    resp,
-                    (
-                        f"Wrong status code {resp.status} from s3 "
-                        f"with message {payload.decode()}."
-                    ),
-                )
-            return parse_create_multipart_upload_id(payload)
-
-    @asyncbackoff(
-        None,
-        None,
-        0,
-        max_tries=3,
-        exceptions=(AwsUploadError, ClientError),
-    )
-    async def _complete_multipart_upload(
-        self,
-        upload_id: str,
-        object_name: str,
-        parts: list[tuple[int, str]],
-    ) -> None:
-        complete_upload_request = create_complete_upload_request(parts)
-        async with self.post(
-            object_name,
-            headers={"Content-Type": "text/xml"},
-            params={"uploadId": upload_id},
-            data=complete_upload_request,
-            content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
-        ) as resp:
-            if resp.status != HTTPStatus.OK:
-                payload = await resp.text()
-                raise AwsUploadError(
-                    resp,
-                    (
-                        f"Wrong status code {resp.status} from s3 "
-                        f"with message {payload}."
-                    ),
-                )
-
     async def _put_part(
         self,
         upload_id: str,
@@ -628,6 +568,7 @@ class S3Client:
             None,
             max_tries=range_get_tries,
             exceptions=(ClientError,),
+            statistic_name="s3.download_range",
         )
         req_range_end = range_start
         for req_range_start in range(range_start, range_end, range_step):
@@ -881,6 +822,7 @@ class MultipartUploader:
             0,
             max_tries=max_retries,
             exceptions=tuple(retry_when),
+            statistic_name="s3.multipart_upload",
         )
 
     async def _create(self):
