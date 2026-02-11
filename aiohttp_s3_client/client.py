@@ -27,7 +27,7 @@ from aiohttp.client import (
     ClientResponse,
 )
 from aiohttp.client_exceptions import ClientError, ClientResponseError
-from aiomisc import asyncbackoff
+from aiohttp_s3_client.retry import Retry
 from aws_request_signer import UNSIGNED_PAYLOAD
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
@@ -489,12 +489,9 @@ class S3Client:
             range_start,
             range_end,
         )
-        backoff = asyncbackoff(
-            None,
-            None,
+        backoff = Retry(
             max_tries=range_get_tries,
             exceptions=(ClientError,),
-            statistic_name="s3.download_range",
         )
         req_range_end = range_start
         for req_range_start in range(range_start, range_end, range_step):
@@ -719,13 +716,9 @@ class MultipartUploader:
         self._part_no = 1
         self._parts: dict[int, str | None] = {}
         self._part_no_lock = threading.Lock()
-        self._retry_policy = asyncbackoff(
-            None,
-            None,
-            0,
+        self._retry_policy = Retry(
             max_tries=max_retries,
             exceptions=tuple(retry_when),
-            statistic_name="s3.multipart_upload",
         )
 
     async def _create(self):
