@@ -53,11 +53,14 @@ EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
 
 if sys.version_info >= (3, 13):
+
     def _guess_content_type(path: str) -> str | None:
         return mimetypes.guess_file_type(path)[0]
 else:
+
     def _guess_content_type(path: str) -> str | None:
         return mimetypes.guess_type(path)[0]
+
 
 HeadersType = dict | CIMultiDict | CIMultiDictProxy
 
@@ -243,10 +246,15 @@ class S3Client:
         **kwargs,
     ) -> RequestContextManager:
         headers = self._prepare_headers(
-            kwargs.pop("headers", None), object_name,
+            kwargs.pop("headers", None),
+            object_name,
         )
         return self.request(
-            "PUT", object_name, data=data, headers=headers, **kwargs,
+            "PUT",
+            object_name,
+            data=data,
+            headers=headers,
+            **kwargs,
         )
 
     def post(
@@ -256,10 +264,15 @@ class S3Client:
         **kwargs,
     ) -> RequestContextManager:
         headers = self._prepare_headers(
-            kwargs.pop("headers", None), object_name,
+            kwargs.pop("headers", None),
+            object_name,
         )
         return self.request(
-            "POST", object_name, data=data, headers=headers, **kwargs,
+            "POST",
+            object_name,
+            data=data,
+            headers=headers,
+            **kwargs,
         )
 
     async def put_file(
@@ -758,7 +771,8 @@ class S3Client:
         headers = self._prepare_headers(headers, destination)
         source_url = self._url / source.lstrip("/")
         headers["x-amz-copy-source"] = quote(
-            source_url.path, safe="/",
+            source_url.path,
+            safe="/",
         )
         if replace_metadata:
             headers["x-amz-metadata-directive"] = "REPLACE"
@@ -790,7 +804,10 @@ class S3Client:
         headers: additional headers forwarded to ``copy()``
         """
         async with self.copy(
-            source, destination, headers=headers, **kwargs,
+            source,
+            destination,
+            headers=headers,
+            **kwargs,
         ) as resp:
             if resp.status != HTTPStatus.OK:
                 payload = await resp.text()
@@ -801,7 +818,8 @@ class S3Client:
 
         async with self.delete(source) as resp:
             if resp.status not in (
-                HTTPStatus.OK, HTTPStatus.NO_CONTENT,
+                HTTPStatus.OK,
+                HTTPStatus.NO_CONTENT,
             ):
                 payload = await resp.text()
                 raise AwsError(
