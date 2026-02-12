@@ -287,7 +287,8 @@ class MetadataCredentials(AbstractCredentials):
                 task.cancel()
         if self._tasks:
             await asyncio.gather(
-                *self._tasks, return_exceptions=True,
+                *self._tasks,
+                return_exceptions=True,
             )
             self._tasks.clear()
         await self.session.close()

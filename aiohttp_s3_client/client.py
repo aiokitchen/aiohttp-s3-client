@@ -1,7 +1,6 @@
 import asyncio
 import hashlib
 import logging
-import os
 import threading
 from collections.abc import (
     AsyncIterable,
@@ -37,7 +36,7 @@ from aiohttp_s3_client.credentials import (
     collect_credentials,
 )
 from aiohttp_s3_client.file_reader import Reader, ChunkFuture
-from aiohttp_s3_client.file_writer import IOWriter, UnixWriter
+from aiohttp_s3_client.file_writer import Writer
 from aiohttp_s3_client.xml import (
     AwsObjectMeta,
     create_complete_upload_request,
@@ -575,12 +574,11 @@ class S3Client:
                 file_size,
             )
 
-        WriterClass = UnixWriter if hasattr(os, "pwrite") else IOWriter
         workers = []
         worker_range_size = file_size // workers_count
         range_end = 0
         try:
-            async with WriterClass(file_path, file_size) as writer:
+            async with Writer(file_path, file_size) as writer:
                 for range_start in range(0, file_size, worker_range_size):
                     range_end += worker_range_size
                     if range_end > file_size:
