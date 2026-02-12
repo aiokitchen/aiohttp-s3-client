@@ -65,6 +65,13 @@ async def main():
         async with client.delete("bucket/key") as resp:
             assert resp == HTTPStatus.NO_CONTENT
 
+        # Server-side copy
+        async with client.copy("bucket/src-key", "bucket/dst-key") as resp:
+            assert resp.status == HTTPStatus.OK
+
+        # Rename (copy + delete source, not atomic)
+        await client.rename("bucket/old-key", "bucket/new-key")
+
         # List objects by prefix
         async for result, prefixes in client.list_objects_v2(
             "bucket/", prefix="prefix",
@@ -356,6 +363,25 @@ async def main():
 
 
 asyncio.run(main())
+```
+
+## Content-Type inference
+
+When uploading objects the client automatically infers the `Content-Type`
+header from the object key (or local file path) using Python's
+`mimetypes.guess_type`. For example, uploading to `bucket/photo.jpg` will
+set `Content-Type: image/jpeg`. If the type cannot be determined it falls
+back to `application/octet-stream`.
+
+You can always override this by passing an explicit `Content-Type` header:
+
+```python
+async with client.put(
+    "bucket/data.bin",
+    some_bytes,
+    headers={"Content-Type": "application/x-custom"},
+) as resp:
+    ...
 ```
 
 ## Parallel download to file

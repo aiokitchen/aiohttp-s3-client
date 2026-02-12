@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import logging
+import mimetypes
+import sys
 import threading
 from collections.abc import (
     AsyncIterable,
@@ -11,7 +13,6 @@ from collections.abc import (
 )
 from functools import cached_property
 from http import HTTPStatus
-from mimetypes import guess_type
 from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -50,6 +51,13 @@ CHUNK_SIZE = 2**16
 DONE = object()
 EMPTY_STR_HASH = hashlib.sha256(b"").hexdigest()
 PART_SIZE = 5 * 1024 * 1024  # 5MB
+
+if sys.version_info >= (3, 13):
+    def _guess_content_type(path: str) -> str | None:
+        return mimetypes.guess_file_type(path)[0]
+else:
+    def _guess_content_type(path: str) -> str | None:
+        return mimetypes.guess_type(path)[0]
 
 HeadersType = dict | CIMultiDict | CIMultiDictProxy
 
@@ -208,12 +216,19 @@ class S3Client:
     def _prepare_headers(
         self,
         headers: HeadersType | None,
-        file_path: str = "",
+        path_hint: str = "",
     ) -> CIMultiDict:
+        """Prepare headers and infer Content-Type when not explicitly set.
+
+        If a ``Content-Type`` header is already present it is left unchanged.
+        Otherwise the type is guessed from *path_hint* (typically the object
+        key or a local file path) using :func:`mimetypes.guess_type`, falling
+        back to ``application/octet-stream``.
+        """
         headers = self._make_headers(headers)
 
         if hdrs.CONTENT_TYPE not in headers:
-            content_type = guess_type(file_path)[0]
+            content_type = _guess_content_type(path_hint)
             if content_type is None:
                 content_type = "application/octet-stream"
 
@@ -227,7 +242,12 @@ class S3Client:
         data: bytes | str | AsyncIterable[bytes],
         **kwargs,
     ) -> RequestContextManager:
-        return self.request("PUT", object_name, data=data, **kwargs)
+        headers = self._prepare_headers(
+            kwargs.pop("headers", None), object_name,
+        )
+        return self.request(
+            "PUT", object_name, data=data, headers=headers, **kwargs,
+        )
 
     def post(
         self,
@@ -235,7 +255,12 @@ class S3Client:
         data: bytes | str | AsyncIterable[bytes] | None = None,
         **kwargs,
     ) -> RequestContextManager:
-        return self.request("POST", object_name, data=data, **kwargs)
+        headers = self._prepare_headers(
+            kwargs.pop("headers", None), object_name,
+        )
+        return self.request(
+            "POST", object_name, data=data, headers=headers, **kwargs,
+        )
 
     async def put_file(
         self,
@@ -324,6 +349,8 @@ class S3Client:
             part_size,
         )
 
+        headers = self._prepare_headers(headers, str(file_path))
+
         async with (
             Reader(
                 file_path,
@@ -398,6 +425,8 @@ class S3Client:
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
         """
+
+        headers = self._prepare_headers(headers, str(object_name))
 
         with TemporaryFile() as fp:
 
@@ -705,6 +734,81 @@ class S3Client:
                 expires=expires,
             )
         )
+
+    def copy(
+        self,
+        source: str,
+        destination: str,
+        *,
+        headers: HeadersType | None = None,
+        replace_metadata: bool = False,
+        content_type: str | None = None,
+        content_sha256: str = EMPTY_STR_HASH,
+        **kwargs,
+    ) -> RequestContextManager:
+        """Server-side copy of an S3 object.
+
+        source: source object key (e.g. ``bucket/key``)
+        destination: destination object key
+        headers: additional headers
+        replace_metadata: when *True* the destination receives the supplied
+            metadata instead of inheriting the source metadata
+        content_type: optional Content-Type override for the destination
+        """
+        headers = self._prepare_headers(headers, destination)
+        source_url = self._url / source.lstrip("/")
+        headers["x-amz-copy-source"] = quote(
+            source_url.path, safe="/",
+        )
+        if replace_metadata:
+            headers["x-amz-metadata-directive"] = "REPLACE"
+        if content_type is not None:
+            headers[hdrs.CONTENT_TYPE] = content_type
+        return self.request(
+            "PUT",
+            destination,
+            headers=headers,
+            content_sha256=content_sha256,
+            **kwargs,
+        )
+
+    async def rename(
+        self,
+        source: str,
+        destination: str,
+        *,
+        headers: HeadersType | None = None,
+        **kwargs,
+    ) -> None:
+        """Move an S3 object by copying then deleting the source.
+
+        This operation is **not** atomic — if the delete fails after a
+        successful copy, the object will exist at both locations.
+
+        source: source object key
+        destination: destination object key
+        headers: additional headers forwarded to ``copy()``
+        """
+        async with self.copy(
+            source, destination, headers=headers, **kwargs,
+        ) as resp:
+            if resp.status != HTTPStatus.OK:
+                payload = await resp.text()
+                raise AwsUploadError(
+                    resp,
+                    f"Copy failed with status {resp.status}: {payload}",
+                )
+
+        async with self.delete(source) as resp:
+            if resp.status not in (
+                HTTPStatus.OK, HTTPStatus.NO_CONTENT,
+            ):
+                payload = await resp.text()
+                raise AwsError(
+                    resp,
+                    f"Delete of source failed with status "
+                    f"{resp.status}: {payload}",
+                )
 
     def multipart_upload(self, object_name: str) -> "MultipartUploader":
         """

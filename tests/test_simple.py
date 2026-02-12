@@ -237,3 +237,34 @@ def test_chunked_and_signature(s3_client: S3Client, s3_url):
     headers = call.kwargs.get("headers")
     trailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
     assert headers.get("x-amz-content-sha256") == trailer
+
+
+async def test_copy_object(s3_client: S3Client, s3_read):
+    data = b"hello, copy"
+    source = "/test/copy-source"
+    destination = "/test/copy-destination"
+
+    resp = await s3_client.put(source, data)
+    assert resp.status == HTTPStatus.OK
+
+    async with s3_client.copy(source, destination) as resp:
+        assert resp.status == HTTPStatus.OK
+
+    assert (await s3_read(source)) == data
+    assert (await s3_read(destination)) == data
+
+
+async def test_rename_object(s3_client: S3Client, s3_read):
+    data = b"hello, rename"
+    source = "/test/rename-source"
+    destination = "/test/rename-destination"
+
+    resp = await s3_client.put(source, data)
+    assert resp.status == HTTPStatus.OK
+
+    await s3_client.rename(source, destination)
+
+    assert (await s3_read(destination)) == data
+
+    async with s3_client.get(source) as resp:
+        assert resp.status == HTTPStatus.NOT_FOUND
