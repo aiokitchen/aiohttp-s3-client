@@ -22,8 +22,11 @@ async def test_multipart_file_upload(s3_client: S3Client, s3_read, tmp_path):
 @pytest.mark.parametrize("calculate_content_sha256", [True, False])
 @pytest.mark.parametrize("workers_count", [1, 2])
 async def test_multipart_stream_upload(
-    calculate_content_sha256, workers_count,
-    s3_client: S3Client, s3_read, tmp_path,
+    calculate_content_sha256,
+    workers_count,
+    s3_client: S3Client,
+    s3_read,
+    tmp_path,
 ):
 
     def iterable():

@@ -1,7 +1,7 @@
 aiohttp-s3-client
 ================
 
-[![PyPI - License](https://img.shields.io/pypi/l/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Wheel](https://img.shields.io/pypi/wheel/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Mypy](http://www.mypy-lang.org/static/mypy_badge.svg)]() [![PyPI](https://img.shields.io/pypi/v/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![PyPI](https://img.shields.io/pypi/pyversions/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Coverage Status](https://coveralls.io/repos/github/mosquito/aiohttp-s3-client/badge.svg?branch=master)](https://coveralls.io/github/mosquito/aiohttp-s3-client?branch=master) [![tests](https://github.com/aiokitchen/aiohttp-s3-client/actions/workflows/tests.yml/badge.svg)](https://github.com/aiokitchen/aiohttp-s3-client/actions/workflows/tests.yml)
+[![PyPI - License](https://img.shields.io/pypi/l/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Wheel](https://img.shields.io/pypi/wheel/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Mypy](http://www.mypy-lang.org/static/mypy_badge.svg)]() [![PyPI](https://img.shields.io/pypi/v/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![PyPI](https://img.shields.io/pypi/pyversions/aiohttp-s3-client)](https://pypi.org/project/aiohttp-s3-client) [![Coverage Status](https://coveralls.io/repos/github/aiokitchen/aiohttp-s3-client/badge.svg?branch=master)](https://coveralls.io/github/aiokitchen/aiohttp-s3-client?branch=master) [![tests](https://github.com/aiokitchen/aiohttp-s3-client/actions/workflows/tests.yml/badge.svg)](https://github.com/aiokitchen/aiohttp-s3-client/actions/workflows/tests.yml)
 
 The simple module for putting and getting object from Amazon S3 compatible endpoints
 
@@ -14,101 +14,124 @@ pip install aiohttp-s3-client
 ## Usage
 
 ```python
+import asyncio
 from http import HTTPStatus
 
 from aiohttp import ClientSession
 from aiohttp_s3_client import S3Client
 
 
-async with ClientSession(raise_for_status=True) as session:
-    client = S3Client(
-        url="http://s3-url",
-        session=session,
-        access_key_id="key-id",
-        secret_access_key="hackme",
-        region="us-east-1"
-    )
+async def main():
+    async with ClientSession(raise_for_status=True) as session:
+        client = S3Client(
+            url="http://s3-url",
+            session=session,
+            access_key_id="key-id",
+            secret_access_key="hackme",
+            region="us-east-1",
+        )
 
-    # Upload str object to bucket "bucket" and key "str"
-    async with client.put("bucket/str", "hello, world") as resp:
-        assert resp.status == HTTPStatus.OK
+        # Upload str object to bucket "bucket" and key "str"
+        async with client.put("bucket/str", "hello, world") as resp:
+            assert resp.status == HTTPStatus.OK
 
-    # Upload bytes object to bucket "bucket" and key "bytes"
-    async with await client.put("bucket/bytes", b"hello, world") as resp:
-        assert resp.status == HTTPStatus.OK
+        # Upload bytes object to bucket "bucket" and key "bytes"
+        async with client.put("bucket/bytes", b"hello, world") as resp:
+            assert resp.status == HTTPStatus.OK
 
-    # Upload AsyncIterable to bucket "bucket" and key "iterable"
-    async def gen():
-        yield b'some bytes'
+        # Upload AsyncIterable to bucket "bucket" and key "iterable"
+        async def gen():
+            yield b"some bytes"
 
-    async with client.put("bucket/file", gen()) as resp:
-        assert resp.status == HTTPStatus.OK
+        async with client.put("bucket/file", gen()) as resp:
+            assert resp.status == HTTPStatus.OK
 
-    # Upload file to bucket "bucket" and key "file"
-    async with client.put_file("bucket/file", "/path_to_file") as resp:
-        assert resp.status == HTTPStatus.OK
+        # Upload file to bucket "bucket" and key "file"
+        async with client.put_file("bucket/file", "/path_to_file") as resp:
+            assert resp.status == HTTPStatus.OK
 
-    # Check object exists using bucket+key
-    async with client.head("bucket/key") as resp:
-        assert resp == HTTPStatus.OK
+        # Check object exists using bucket+key
+        async with client.head("bucket/key") as resp:
+            assert resp == HTTPStatus.OK
 
-    # Get object by bucket+key
-    async with client.get("bucket/key") as resp:
-        data = await resp.read()
+        # Get object by bucket+key
+        async with client.get("bucket/key") as resp:
+            data = await resp.read()
 
-    # Make presigned URL
-    url = client.presign_url("GET", "bucket/key", expires=60 * 60)
+        # Make presigned URL
+        url = client.presign_url("GET", "bucket/key", expires=60 * 60)
 
-    # Delete object using bucket+key
-    async with client.delete("bucket/key") as resp:
-        assert resp == HTTPStatus.NO_CONTENT
+        # Delete object using bucket+key
+        async with client.delete("bucket/key") as resp:
+            assert resp == HTTPStatus.NO_CONTENT
 
-    # List objects by prefix
-    async for result, prefixes in client.list_objects_v2("bucket/", prefix="prefix"):
-        # Each result is a list of metadata objects representing an object
-        # stored in the bucket.  Each prefixes is a list of common prefixes
-        do_work(result, prefixes)
+        # List objects by prefix
+        async for result, prefixes in client.list_objects_v2(
+            "bucket/", prefix="prefix",
+        ):
+            # Each result is a list of metadata objects representing an object
+            # stored in the bucket.  Each prefixes is a list of common prefixes
+            print(result, prefixes)
+
+
+asyncio.run(main())
 ```
 
 Bucket may be specified as subdomain or in object name:
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 
 
-client = S3Client(url="http://bucket.your-s3-host",
-                  session=aiohttp.ClientSession())
-async with client.put("key", gen()) as resp:
-    ...
+async def main():
+    async with aiohttp.ClientSession() as session:
+        # As a subdomain
+        client = S3Client(url="http://bucket.your-s3-host", session=session)
+        async with client.put("key", b"data") as resp:
+            ...
 
-client = S3Client(url="http://your-s3-host",
-                  session=aiohttp.ClientSession())
-async with await client.put("bucket/key", gen()) as resp:
-    ...
+        # In the object name
+        client = S3Client(url="http://your-s3-host", session=session)
+        async with client.put("bucket/key", b"data") as resp:
+            ...
 
-client = S3Client(url="http://your-s3-host/bucket",
-                  session=aiohttp.ClientSession())
-async with client.put("key", gen()) as resp:
-    ...
+        # In the base URL
+        client = S3Client(url="http://your-s3-host/bucket", session=session)
+        async with client.put("key", b"data") as resp:
+            ...
+
+
+asyncio.run(main())
 ```
 
 Auth may be specified with keywords or in URL:
+
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 
-client_credentials_as_kw = S3Client(
-    url="http://your-s3-host",
-    access_key_id="key_id",
-    secret_access_key="access_key",
-    session=aiohttp.ClientSession(),
-)
 
-client_credentials_in_url = S3Client(
-    url="http://key_id:access_key@your-s3-host",
-    session=aiohttp.ClientSession(),
-)
+async def main():
+    async with aiohttp.ClientSession() as session:
+        client_credentials_as_kw = S3Client(
+            url="http://your-s3-host",
+            access_key_id="key_id",
+            secret_access_key="access_key",
+            session=session,
+        )
+
+        client_credentials_in_url = S3Client(
+            url="http://key_id:access_key@your-s3-host",
+            session=session,
+        )
+
+
+asyncio.run(main())
 ```
 
 ## Credentials
@@ -124,51 +147,75 @@ module.
 ### `aiohttp_s3_client.credentials.StaticCredentials`
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import StaticCredentials
 
-credentials = StaticCredentials(
-    access_key_id='aaaa',
-    secret_access_key='bbbb',
-    region='us-east-1',
-)
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-    credentials=credentials,
-)
+
+async def main():
+    credentials = StaticCredentials(
+        access_key_id="aaaa",
+        secret_access_key="bbbb",
+        region="us-east-1",
+    )
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(
+            url="http://your-s3-host",
+            session=session,
+            credentials=credentials,
+        )
+
+
+asyncio.run(main())
 ```
 
 ### `aiohttp_s3_client.credentials.URLCredentials`
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import URLCredentials
 
-url = "http://key@hack-me:your-s3-host"
-credentials = URLCredentials(url, region="us-east-1")
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-    credentials=credentials,
-)
+
+async def main():
+    url = "http://key:hack-me@your-s3-host"
+    credentials = URLCredentials(url, region="us-east-1")
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(
+            url="http://your-s3-host",
+            session=session,
+            credentials=credentials,
+        )
+
+
+asyncio.run(main())
 ```
 
 ### `aiohttp_s3_client.credentials.EnvironmentCredentials`
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import EnvironmentCredentials
 
-credentials = EnvironmentCredentials(region="us-east-1")
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-    credentials=credentials,
-)
+
+async def main():
+    credentials = EnvironmentCredentials(region="us-east-1")
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(
+            url="http://your-s3-host",
+            session=session,
+            credentials=credentials,
+        )
+
+
+asyncio.run(main())
 ```
 
 ### `aiohttp_s3_client.credentials.ConfigCredentials`
@@ -176,33 +223,47 @@ client = S3Client(
 Using user config file:
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import ConfigCredentials
 
 
-credentials = ConfigCredentials()   # Will be used ~/.aws/credentials config
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-    credentials=credentials,
-)
+async def main():
+    credentials = ConfigCredentials()   # Will be used ~/.aws/credentials config
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(
+            url="http://your-s3-host",
+            session=session,
+            credentials=credentials,
+        )
+
+
+asyncio.run(main())
 ```
 
 Using the custom config location:
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import ConfigCredentials
 
 
-credentials = ConfigCredentials("~/.my-custom-aws-credentials")
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-    credentials=credentials,
-)
+async def main():
+    credentials = ConfigCredentials("~/.my-custom-aws-credentials")
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(
+            url="http://your-s3-host",
+            session=session,
+            credentials=credentials,
+        )
+
+
+asyncio.run(main())
 ```
 
 ### `aiohttp_s3_client.credentials.merge_credentials`
@@ -211,44 +272,61 @@ This function collect all passed credentials instances and return a new one
 which contains all non-blank fields from passed instances. The first argument
 has more priority.
 
-
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import (
-    ConfigCredentials, EnvironmentCredentials, merge_credentials
+    ConfigCredentials, EnvironmentCredentials, merge_credentials,
 )
 
-credentials = merge_credentials(
-    EnvironmentCredentials(),
-    ConfigCredentials(),
-)
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-    credentials=credentials,
-)
+
+async def main():
+    credentials = merge_credentials(
+        EnvironmentCredentials(),
+        ConfigCredentials(),
+    )
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(
+            url="http://your-s3-host",
+            session=session,
+            credentials=credentials,
+        )
+
+
+asyncio.run(main())
 ```
-
 
 ### `aiohttp_s3_client.credentials.MetadataCredentials`
 
 Trying to get credentials from the metadata service:
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 from aiohttp_s3_client.credentials import MetadataCredentials
 
-credentials = MetadataCredentials()
 
-# start refresh credentials from metadata server
-await credentials.start()
-client = S3Client(
-    url="http://your-s3-host",
-    session=aiohttp.ClientSession(),
-)
-await credentials.stop()
+async def main():
+    credentials = MetadataCredentials()
+
+    # start refresh credentials from metadata server
+    await credentials.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = S3Client(
+                url="http://your-s3-host",
+                session=session,
+                credentials=credentials,
+            )
+    finally:
+        await credentials.stop()
+
+
+asyncio.run(main())
 ```
 
 ## Multipart upload
@@ -259,18 +337,25 @@ to S3.
 S3Client handles retries of part uploads and calculates part hash for integrity checks.
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 
 
-client = S3Client(url="http://your-s3-host", session=aiohttp.ClientSession())
-await client.put_file_multipart(
-    "test/bigfile.csv",
-    headers={
-        "Content-Type": "text/csv",
-    },
-    workers_count=8,
-)
+async def main():
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(url="http://your-s3-host", session=session)
+        await client.put_file_multipart(
+            "test/bigfile.csv",
+            headers={
+                "Content-Type": "text/csv",
+            },
+            workers_count=8,
+        )
+
+
+asyncio.run(main())
 ```
 
 ## Parallel download to file
@@ -284,17 +369,23 @@ write simultaneously to a single file. Otherwise, each worker will have own file
 which will be concatenated after downloading.
 
 ```python
+import asyncio
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 
 
-client = S3Client(url="http://your-s3-host", session=aiohttp.ClientSession())
+async def main():
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(url="http://your-s3-host", session=session)
+        await client.get_file_parallel(
+            "dump/bigfile.csv",
+            "/home/user/bigfile.csv",
+            workers_count=8,
+        )
 
-await client.get_file_parallel(
-    "dump/bigfile.csv",
-    "/home/user/bigfile.csv",
-    workers_count=8,
-)
+
+asyncio.run(main())
 ```
 
 ### Manual multipart upload
@@ -344,26 +435,36 @@ returned coroutine — the uploader handles integrity checks and retrying.
 Create parts then upload them concurrently:
 
 ```python
+import asyncio
 import hashlib
+
 import aiohttp
 from aiohttp_s3_client import S3Client
 
-client = S3Client(url="http://your-s3-host", session=aiohttp.ClientSession())
 
-async with client.multipart_upload("test/video.mov") as uploader:
-    uploads = []
+async def main():
+    async with aiohttp.ClientSession() as session:
+        client = S3Client(url="http://your-s3-host", session=session)
 
-    # Call put_part in the correct part sequence and collect coroutines.
-    # The uploader assigns part numbers in the order put_part is called.
-    for chunk in chunks:
-        uploads.append(
-            uploader.put_part(
-                chunk,
-                content_sha256=hashlib.sha256(chunk).hexdigest(),
-            )
-        )
+        chunks = [b"x" * 5 * 1024 * 1024, b"y" * 5 * 1024 * 1024]
 
-    # Now execute all part uploads concurrently. The uploader will handle
-    # retries and integrity checks for each part.
-    await asyncio.gather(*uploads)
+        async with client.multipart_upload("test/video.mov") as uploader:
+            uploads = []
+
+            # Call put_part in the correct part sequence and collect coroutines.
+            # The uploader assigns part numbers in the order put_part is called.
+            for chunk in chunks:
+                uploads.append(
+                    uploader.put_part(
+                        chunk,
+                        content_sha256=hashlib.sha256(chunk).hexdigest(),
+                    ),
+                )
+
+            # Now execute all part uploads concurrently. The uploader will
+            # handle retries and integrity checks for each part.
+            await asyncio.gather(*uploads)
+
+
+asyncio.run(main())
 ```

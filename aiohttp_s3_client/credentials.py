@@ -7,22 +7,13 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Tuple, Union
+from functools import cached_property
+from collections.abc import Mapping
+from typing import Any, TypedDict
 
 import aiohttp
 from aws_request_signer import AwsRequestSigner
 from yarl import URL
-
-
-try:
-    from functools import cached_property
-except ImportError:
-    from cached_property import cached_property  # type: ignore
-
-try:
-    from typing import TypedDict
-except ImportError:
-    from typing_extensions import TypedDict
 
 
 log = logging.getLogger(__name__)
@@ -30,20 +21,18 @@ log = logging.getLogger(__name__)
 
 class AbstractCredentials(ABC):
     @abstractmethod
-    def __bool__(self) -> bool:
-        ...
+    def __bool__(self) -> bool: ...
 
     @property
     @abstractmethod
-    def signer(self) -> AwsRequestSigner:
-        ...
+    def signer(self) -> AwsRequestSigner: ...
 
 
 @dataclass(frozen=True)
 class StaticCredentials(AbstractCredentials):
     access_key_id: str = ""
     secret_access_key: str = ""
-    session_token: Optional[str] = None
+    session_token: str | None = None
     region: str = ""
     service: str = "s3"
 
@@ -54,7 +43,7 @@ class StaticCredentials(AbstractCredentials):
         return (
             f"{self.__class__.__name__}(access_key_id={self.access_key_id!r}, "
             "secret_access_key="
-            f'{"******" if self.secret_access_key else None!r}, '
+            f"{'******' if self.secret_access_key else None!r}, "
             f"region={self.region!r}, service={self.service!r})"
         )
 
@@ -74,13 +63,18 @@ class StaticCredentials(AbstractCredentials):
 
 class URLCredentials(StaticCredentials):
     def __init__(
-        self, url: Union[str, URL], *, region: str = "", service: str = "s3",
+        self,
+        url: str | URL,
+        *,
+        region: str = "",
+        service: str = "s3",
     ):
         url = URL(url)
         super().__init__(
             access_key_id=url.user or "",
             secret_access_key=url.password or "",
-            region=region, service=service,
+            region=region,
+            service=service,
         )
 
 
@@ -112,9 +106,12 @@ class ConfigCredentials(StaticCredentials):
 
     def __init__(
         self,
-        credentials_path: Union[str, Path, None] = None,
-        config_path: Union[str, Path, None] = DEFAULT_CONFIG_PATH, *,
-        region: str = "", service: str = "s3", profile: str = "auto",
+        credentials_path: str | Path | None = None,
+        config_path: str | Path | None = DEFAULT_CONFIG_PATH,
+        *,
+        region: str = "",
+        service: str = "s3",
+        profile: str = "auto",
     ):
         if credentials_path is None:
             credentials_path = Path(
@@ -169,8 +166,11 @@ ENVIRONMENT_CREDENTIALS = EnvironmentCredentials()
 def merge_credentials(*credentials: StaticCredentials) -> StaticCredentials:
     result = {}
     fields = (
-        "access_key_id", "secret_access_key",
-        "session_token", "region", "service",
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "region",
+        "service",
     )
 
     for candidate in credentials:
@@ -186,9 +186,11 @@ def merge_credentials(*credentials: StaticCredentials) -> StaticCredentials:
 
 
 def collect_credentials(
-    *, url: Optional[URL] = None, **kwargs,
+    *,
+    url: URL | None = None,
+    **kwargs,
 ) -> StaticCredentials:
-    credentials: List[StaticCredentials] = []
+    credentials: list[StaticCredentials] = []
     if kwargs:
         credentials.append(StaticCredentials(**kwargs))
     if url:
@@ -220,6 +222,7 @@ class MetadataDocument(TypedDict, total=False):
           "version" : "2017-09-30"
         }
     """
+
     region: str
 
 
@@ -239,19 +242,25 @@ class MetadataCredentials(AbstractCredentials):
     def __bool__(self) -> bool:
         return self.is_started.is_set()
 
-    def __init__(self, *, service: str = "s3"):
+    def __init__(
+        self,
+        *,
+        service: str = "s3",
+        host: str = "",
+        port: int = 0,
+    ):
         self.session = aiohttp.ClientSession(
             base_url=URL.build(
                 scheme="http",
-                host=self.METADATA_ADDRESS,
-                port=self.METADATA_PORT,
+                host=host or self.METADATA_ADDRESS,
+                port=port or self.METADATA_PORT,
             ),
             headers={},
         )
         self.service = service
         self.refresh_lock: asyncio.Lock = asyncio.Lock()
-        self._signer: Optional[AwsRequestSigner] = None
-        self._tasks: List[asyncio.Task] = []
+        self._signer: AwsRequestSigner | None = None
+        self._tasks: list[asyncio.Task] = []
         self.is_started = asyncio.Event()
 
     async def _refresher(self) -> None:
@@ -260,7 +269,7 @@ class MetadataCredentials(AbstractCredentials):
                 try:
                     credentials, expires_at = await self._fetch_credentials()
                     self._signer = AwsRequestSigner(**credentials.as_dict())
-                    delta = expires_at - datetime.datetime.utcnow()
+                    delta = expires_at - datetime.datetime.now(datetime.UTC)
                     sleep_time = math.floor(delta.total_seconds() / 2)
                     self.is_started.set()
                 except Exception:
@@ -273,18 +282,26 @@ class MetadataCredentials(AbstractCredentials):
         await self.is_started.wait()
 
     async def stop(self, *_: Any) -> None:
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
         if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            await asyncio.gather(
+                *self._tasks,
+                return_exceptions=True,
+            )
+            self._tasks.clear()
         await self.session.close()
 
     async def _fetch_credentials(
         self,
-    ) -> Tuple[StaticCredentials, datetime.datetime]:
+    ) -> tuple[StaticCredentials, datetime.datetime]:
         async with self.session.get(
             "/latest/dynamic/instance-identity/document",
         ) as response:
             document: MetadataDocument = await response.json(
-                content_type=None, encoding="utf-8",
+                content_type=None,
+                encoding="utf-8",
             )
 
         async with self.session.get(
@@ -296,7 +313,8 @@ class MetadataCredentials(AbstractCredentials):
             f"/latest/meta-data/iam/security-credentials/{iam_role}",
         ) as response:
             credentials: MetadataSecurityCredentials = await response.json(
-                content_type=None, encoding="utf-8",
+                content_type=None,
+                encoding="utf-8",
             )
 
         return (
@@ -309,7 +327,7 @@ class MetadataCredentials(AbstractCredentials):
             datetime.datetime.strptime(
                 credentials["Expiration"],
                 "%Y-%m-%dT%H:%M:%SZ",
-            ),
+            ).replace(tzinfo=datetime.UTC),
         )
 
     @property

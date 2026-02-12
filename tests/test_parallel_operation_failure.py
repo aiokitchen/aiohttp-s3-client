@@ -107,7 +107,7 @@ async def s3_mock_post_object_handler(request):
 async def s3_mock_head_object_handler(request):
     return web.Response(
         headers={
-            hdrs.CONTENT_LENGTH: str((1024 ** 2) * 16),
+            hdrs.CONTENT_LENGTH: str((1024**2) * 16),
             hdrs.ETAG: "7e10e7d25dc4581d89b9285be5f384fd",
         },
     )
@@ -117,7 +117,7 @@ async def s3_mock_get_object_handler(request):
     return web.Response(
         status=HTTPStatus.INTERNAL_SERVER_ERROR,
         headers={
-            hdrs.CONTENT_LENGTH: str((1024 ** 2) * 5),
+            hdrs.CONTENT_LENGTH: str((1024**2) * 5),
             hdrs.ETAG: "7e10e7d25dc4581d89b9285be5f384fd",
         },
     )

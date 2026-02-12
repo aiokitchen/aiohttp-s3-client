@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 from unittest import mock
@@ -5,11 +6,16 @@ from unittest import mock
 import pytest
 from aiohttp import web
 from pytest import FixtureRequest
-from pytest_aiohttp.plugin import TestServer    # type: ignore[attr-defined]
+from pytest_aiohttp.plugin import TestServer  # type: ignore[attr-defined]
 
 from aiohttp_s3_client.credentials import (
-    AbstractCredentials, ConfigCredentials, EnvironmentCredentials,
-    MetadataCredentials, StaticCredentials, URLCredentials, merge_credentials,
+    AbstractCredentials,
+    ConfigCredentials,
+    EnvironmentCredentials,
+    MetadataCredentials,
+    StaticCredentials,
+    URLCredentials,
+    merge_credentials,
 )
 
 
@@ -37,7 +43,8 @@ def test_env_credentials_false():
 
 
 @mock.patch.dict(
-    os.environ, {
+    os.environ,
+    {
         "AWS_ACCESS_KEY_ID": "key",
         "AWS_SECRET_ACCESS_KEY": "hack-me",
         "AWS_DEFAULT_REGION": "cc-mid-2",
@@ -54,24 +61,28 @@ def test_env_credentials_mock():
 def test_config_credentials(tmp_path):
     with open(tmp_path / "credentials", "w") as fp:
         fp.write(
-            "\n".join([
-                "[test-profile]",
-                "  aws_access_key_id = test-key",
-                "  aws_secret_access_key = test-secret",
-                "[default]",
-                "aws_access_key_id = default-key",
-                "aws_secret_access_key = default-secret",
-            ]),
+            "\n".join(
+                [
+                    "[test-profile]",
+                    "  aws_access_key_id = test-key",
+                    "  aws_secret_access_key = test-secret",
+                    "[default]",
+                    "aws_access_key_id = default-key",
+                    "aws_secret_access_key = default-secret",
+                ]
+            ),
         )
 
     with open(tmp_path / "config", "w") as fp:
         fp.write(
-            "\n".join([
-                "[test-profile]",
-                "  region = ru-central1",
-                "[default]",
-                "region = us-east-1",
-            ]),
+            "\n".join(
+                [
+                    "[test-profile]",
+                    "  region = ru-central1",
+                    "[default]",
+                    "region = us-east-1",
+                ]
+            ),
         )
 
     cred = ConfigCredentials(
@@ -130,7 +141,7 @@ def metadata_server_app() -> web.Application:
         }
 
         """
-        last_updated = datetime.datetime.utcnow()
+        last_updated = datetime.datetime.now(datetime.UTC)
 
         if request.match_info["role"] != "pytest":
             raise web.HTTPNotFound()
@@ -259,11 +270,8 @@ async def test_metadata_credentials(
     server = TestServer(metadata_server_app)
     await server.start_server()
 
-    class TestMetadataCredentials(MetadataCredentials):
-        METADATA_ADDRESS = server.host
-        METADATA_PORT = server.port    # type: ignore[assignment]
-
-    credentials = TestMetadataCredentials()
+    assert server.port is not None
+    credentials = MetadataCredentials(host=server.host, port=server.port)
     assert isinstance(credentials, AbstractCredentials)
 
     assert not credentials
@@ -272,22 +280,23 @@ async def test_metadata_credentials(
         print(credentials.signer)
 
     await credentials.start()
-    request.addfinalizer(credentials.stop)
+    try:
+        assert credentials
 
-    assert credentials
-
-    assert credentials.signer
-    assert credentials.signer.region == "us-east-99"
-    assert credentials.signer.access_key_id == "PYTESTACCESSKEYID"
-    assert credentials.signer.secret_access_key == "PYTESTACCESSKEYSECRET"
-    assert credentials.signer.session_token == "PYTESTACCESSTOKEN"
+        assert credentials.signer
+        assert credentials.signer.region == "us-east-99"
+        assert credentials.signer.access_key_id == "PYTESTACCESSKEYID"
+        assert credentials.signer.secret_access_key == "PYTESTACCESSKEYSECRET"
+        assert credentials.signer.session_token == "PYTESTACCESSTOKEN"
+    finally:
+        await asyncio.wait_for(credentials.stop(), timeout=5)
 
 
 async def test_merge_credentials():
     credentials = [
         StaticCredentials(access_key_id="access_key"),
         StaticCredentials(secret_access_key="secret"),
-        StaticCredentials(session_token="token")
+        StaticCredentials(session_token="token"),
     ]
 
     assert not all(credentials)
@@ -303,9 +312,9 @@ async def test_merge_credentials():
         StaticCredentials(
             access_key_id="overriden",
             secret_access_key="overriden",
-            session_token="overriden"
+            session_token="overriden",
         ),
-        *credentials
+        *credentials,
     )
 
     assert result.access_key_id == "overriden"

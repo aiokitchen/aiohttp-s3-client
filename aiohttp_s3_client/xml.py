@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sys import intern
-from typing import List, NamedTuple, Optional, Tuple
+from typing import NamedTuple
 from xml.etree import ElementTree as ET
 
 
@@ -25,7 +25,7 @@ def parse_create_multipart_upload_id(payload: bytes) -> str:
     return uploadid_el.text
 
 
-def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
+def create_complete_upload_request(parts: list[tuple[int, str]]) -> bytes:
     ET.register_namespace("", NS)
     root = ET.Element(f"{{{NS}}}CompleteMultipartUpload")
 
@@ -36,14 +36,17 @@ def create_complete_upload_request(parts: List[Tuple[int, str]]) -> bytes:
         part_number_el = ET.SubElement(part_el, "PartNumber")
         part_number_el.text = str(part_no)
 
-    return (
-        b'<?xml version="1.0" encoding="UTF-8"?>' +
-        ET.tostring(root, encoding="UTF-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>' + ET.tostring(
+        root, encoding="UTF-8"
     )
 
 
-def parse_list_objects(payload: bytes) -> Tuple[
-    List[AwsObjectMeta], List[str], Optional[str],
+def parse_list_objects(
+    payload: bytes,
+) -> tuple[
+    list[AwsObjectMeta],
+    list[str],
+    str | None,
 ]:
     root = ET.fromstring(payload)
     result = []
@@ -55,7 +58,7 @@ def parse_list_objects(payload: bytes) -> Tuple[
     for el in root.findall(f"{{{NS}}}Contents"):
         etag = key = last_modified = size = storage_class = None
         for child in el:
-            tag = child.tag[child.tag.rfind("}") + 1:]
+            tag = child.tag[child.tag.rfind("}") + 1 :]
             text = child.text
             if text is None:
                 continue
@@ -73,11 +76,11 @@ def parse_list_objects(payload: bytes) -> Tuple[
             elif tag == "StorageClass":
                 storage_class = intern(text)
         if (
-            etag and
-            key and
-            last_modified and
-            size is not None and
-            storage_class
+            etag
+            and key
+            and last_modified
+            and size is not None
+            and storage_class
         ):
             meta = AwsObjectMeta(etag, key, last_modified, size, storage_class)
             result.append(meta)
