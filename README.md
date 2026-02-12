@@ -384,6 +384,68 @@ async with client.put(
     ...
 ```
 
+## Custom metadata
+
+S3 allows you to attach arbitrary key-value metadata to objects using
+`x-amz-meta-<key>` headers. You can pass these via the `headers` parameter
+on any upload method.
+
+With `client.put()`:
+
+```python
+async with client.put(
+    "bucket/report.json",
+    b'{"result": 42}',
+    headers={
+        "x-amz-meta-author": "alice",
+        "x-amz-meta-version": "3",
+    },
+) as resp:
+    assert resp.status == 200
+```
+
+With `client.put_file()`:
+
+```python
+resp = await client.put_file(
+    "bucket/photo.jpg",
+    "/path/to/photo.jpg",
+    headers={
+        "x-amz-meta-camera": "Nikon D850",
+        "x-amz-meta-location": "Paris",
+    },
+)
+```
+
+With `client.put_file_multipart()`:
+
+```python
+await client.put_file_multipart(
+    "bucket/bigfile.csv",
+    "/path/to/bigfile.csv",
+    headers={
+        "Content-Type": "text/csv",
+        "x-amz-meta-source": "etl-pipeline",
+    },
+    workers_count=8,
+)
+```
+
+Metadata can also be set or replaced during a server-side copy by passing
+`replace_metadata=True`:
+
+```python
+async with client.copy(
+    "bucket/src-key",
+    "bucket/dst-key",
+    replace_metadata=True,
+    headers={
+        "x-amz-meta-status": "archived",
+    },
+) as resp:
+    assert resp.status == 200
+```
+
 ## Parallel download to file
 
 S3 supports `GET` requests with `Range` header. It's possible to download
