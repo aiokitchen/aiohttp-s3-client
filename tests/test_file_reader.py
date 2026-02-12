@@ -4,11 +4,7 @@ import os
 
 import pytest
 
-from aiohttp_s3_client.file_reader import (
-    IOReader,
-    Reader,
-    UnixReader,
-)
+from aiohttp_s3_client.file_reader import Reader
 
 
 @pytest.fixture()
@@ -84,30 +80,12 @@ async def test_reader_compute_sha256_enabled(sample_file):
     assert chunks[0].sha256 == hashlib.sha256(data).hexdigest()
 
 
-async def test_io_reader_reads_correctly(sample_file):
-    data = sample_file.read_bytes()
-    async with IOReader(sample_file) as reader:
-        chunks = [await fut for fut in reader.chunked(4096)]
-    assert b"".join(c.data for c in chunks) == data
-
-
-@pytest.mark.skipif(
-    not hasattr(os, "pread"),
-    reason="os.pread not available",
-)
-async def test_unix_reader_reads_correctly(sample_file):
-    data = sample_file.read_bytes()
-    async with UnixReader(sample_file) as reader:
-        chunks = [await fut for fut in reader.chunked(4096)]
-    assert b"".join(c.data for c in chunks) == data
-
-
-async def test_io_reader_concurrent_reads(tmp_path):
+async def test_reader_concurrent_reads(tmp_path):
     p = tmp_path / "concurrent.bin"
     data = os.urandom(1024)
     p.write_bytes(data)
 
-    async with IOReader(p) as reader:
+    async with Reader(p) as reader:
         futures = list(reader.chunked(size=100))
         chunks = await asyncio.gather(*futures)
     assert b"".join(c.data for c in chunks) == data

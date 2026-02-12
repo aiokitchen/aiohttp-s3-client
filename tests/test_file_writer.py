@@ -3,11 +3,7 @@ import os
 
 import pytest
 
-from aiohttp_s3_client.file_writer import (
-    IOWriter,
-    UnixWriter,
-    Writer,
-)
+from aiohttp_s3_client.file_writer import Writer
 
 
 @pytest.fixture()
@@ -88,59 +84,3 @@ async def test_writer_overwrite_existing_file(existing_file):
     async with Writer(existing_file, len(new_data)) as writer:
         await writer.write(new_data, 0)
     assert existing_file.read_bytes() == new_data
-
-
-async def test_io_writer_writes_correctly(target_file):
-    data = b"IOWriter test data"
-    async with IOWriter(target_file, len(data)) as writer:
-        await writer.write(data, 0)
-    assert target_file.read_bytes() == data
-
-
-async def test_io_writer_concurrent_writes(target_file):
-    chunk_size = 100
-    num_chunks = 10
-    file_size = chunk_size * num_chunks
-    chunks = [os.urandom(chunk_size) for _ in range(num_chunks)]
-
-    async with IOWriter(target_file, file_size) as writer:
-        await asyncio.gather(
-            *(
-                writer.write(chunks[i], i * chunk_size)
-                for i in range(num_chunks)
-            )
-        )
-
-    assert target_file.read_bytes() == b"".join(chunks)
-
-
-@pytest.mark.skipif(
-    not hasattr(os, "pwrite"),
-    reason="os.pwrite not available",
-)
-async def test_unix_writer_writes_correctly(target_file):
-    data = b"UnixWriter test data"
-    async with UnixWriter(target_file, len(data)) as writer:
-        await writer.write(data, 0)
-    assert target_file.read_bytes() == data
-
-
-@pytest.mark.skipif(
-    not hasattr(os, "pwrite"),
-    reason="os.pwrite not available",
-)
-async def test_unix_writer_concurrent_writes(target_file):
-    chunk_size = 100
-    num_chunks = 10
-    file_size = chunk_size * num_chunks
-    chunks = [os.urandom(chunk_size) for _ in range(num_chunks)]
-
-    async with UnixWriter(target_file, file_size) as writer:
-        await asyncio.gather(
-            *(
-                writer.write(chunks[i], i * chunk_size)
-                for i in range(num_chunks)
-            )
-        )
-
-    assert target_file.read_bytes() == b"".join(chunks)
