@@ -313,6 +313,7 @@ async def test_cancellation_preserves_request_cleanup(tmp_path, from_file):
     release_cleanup = asyncio.Event()
     parts = set()
     events = []
+    failed_requests = 0
 
     async def handle(request):
         await request.read()
@@ -335,8 +336,12 @@ async def test_cancellation_preserves_request_cleanup(tmp_path, from_file):
         return web.Response(status=204)
 
     async def on_request_exception(session, context, params):
-        part_number = params.url.query.get("partNumber")
-        if part_number == "1":
+        nonlocal failed_requests
+        if params.method != "PUT":
+            return
+
+        failed_requests += 1
+        if failed_requests == 1:
             task = asyncio.current_task()
             assert task is not None
             loop = asyncio.get_running_loop()
@@ -345,7 +350,7 @@ async def test_cancellation_preserves_request_cleanup(tmp_path, from_file):
                 lambda _: loop.call_soon(release_cleanup.set)
             )
 
-        elif part_number == "2":
+        else:
             events.append("cleanup_started")
             await release_cleanup.wait()
             events.append("cleanup_completed")
@@ -416,3 +421,75 @@ async def test_abort_failure_retries_and_keeps_upload_id(
     assert raised.value.status == status
     assert state.calls == ["create", "abort", "abort", "abort"]
     assert upload._upload_id == "upload-id"
+
+
+@pytest.mark.parametrize("from_file", [False, True])
+async def test_failure_cancels_retry_with_stale_cancellation_count(
+    multipart_backend, monkeypatch, tmp_path, from_file
+):
+    client, state = multipart_backend
+    retry_started = asyncio.Event()
+    release_retry = asyncio.Event()
+    events = []
+    attempts = 0
+    original = ValueError("another part failed")
+
+    async def part_uploader(self, part_no, data, content_sha256, **kwargs):
+        nonlocal attempts
+        task = asyncio.current_task()
+        assert task is not None
+
+        if part_no == 1:
+            attempts += 1
+            if attempts == 1:
+                # aiohttp 3.8 timeouts translate cancellation to TimeoutError
+                # without decrementing the task's cancellation counter.
+                task.cancel()
+                try:
+                    await asyncio.sleep(0)
+                except asyncio.CancelledError:
+                    raise asyncio.TimeoutError from None
+
+            assert task.cancelling() > 0
+            retry_started.set()
+            try:
+                await release_retry.wait()
+                events.append("retry_completed")
+            except asyncio.CancelledError:
+                events.append("retry_cancelled")
+                raise
+        else:
+            await retry_started.wait()
+            loop = asyncio.get_running_loop()
+            # Give the parent a chance to cancel the retry before it finishes.
+            task.add_done_callback(lambda _: loop.call_soon(release_retry.set))
+            raise original
+
+    def assert_retry_stopped():
+        assert events == ["retry_cancelled"]
+
+    monkeypatch.setattr(MultipartUploader, "_part_uploader", part_uploader)
+    state.abort_guard = assert_retry_stopped
+
+    with pytest.raises(ValueError) as raised:
+        if from_file:
+            path = tmp_path / "parts.bin"
+            path.write_bytes(b"x" * 8)
+            await client.put_file_multipart(
+                object_name="key",
+                file_path=path,
+                part_size=4,
+                workers_count=2,
+            )
+        else:
+            await client.put_multipart(
+                object_name="key",
+                data=[b"x" * 8],
+                part_size=4,
+                workers_count=2,
+            )
+
+    assert raised.value is original
+    assert attempts == 2
+    assert events == ["retry_cancelled"]
+    assert state.calls == ["create", "abort"]
