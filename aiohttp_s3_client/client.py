@@ -377,36 +377,48 @@ class S3Client:
                 **kwargs,
             ) as uploader,
         ):
-            semaphore: asyncio.Semaphore | None = (
-                asyncio.Semaphore(workers_count) if workers_count > 1 else None
+            await self._upload_parts(
+                uploader=uploader,
+                chunks=reader.chunked(size=part_size),
+                workers_count=workers_count,
             )
 
-            async def upload_part(task: Coroutine, chunk: ChunkFuture):
-                try:
-                    if semaphore is None:
-                        return await task
-                    async with semaphore:
-                        return await task
-                finally:
-                    # Also close parts cancelled while waiting for a worker.
-                    task.close()
-                    chunk.close()
-
-            tasks = []
-            for chunk_future in reader.chunked(size=part_size):
-                tasks.append(
-                    upload_part(
-                        task=uploader.put_part(
-                            data=chunk_future, content_sha256=""
-                        ),
-                        chunk=chunk_future,
-                    ),
-                )
-            await self._wait_for_uploads(tasks)
-
     @staticmethod
-    async def _wait_for_uploads(uploads: Iterable[Coroutine]) -> None:
+    async def _upload_parts(
+        *,
+        uploader: "MultipartUploader",
+        chunks: Iterable[ChunkFuture],
+        workers_count: int,
+    ) -> None:
+        semaphore = (
+            asyncio.Semaphore(workers_count) if workers_count > 1 else None
+        )
+
+        async def upload_part(
+            *,
+            upload: Coroutine[None, None, None],
+            chunk: ChunkFuture,
+        ) -> None:
+            try:
+                if semaphore is None:
+                    await upload
+                else:
+                    async with semaphore:
+                        await upload
+            finally:
+                # Also close parts cancelled while waiting for a worker.
+                upload.close()
+                chunk.close()
+
+        uploads: list[Coroutine[None, None, None]] = [
+            upload_part(
+                upload=uploader.put_part(data=chunk, content_sha256=""),
+                chunk=chunk,
+            )
+            for chunk in chunks
+        ]
         tasks = [asyncio.create_task(upload) for upload in uploads]
+
         try:
             await asyncio.gather(*tasks)
         except BaseException:
@@ -482,35 +494,11 @@ class S3Client:
                     **kwargs,
                 ) as uploader,
             ):
-                semaphore: asyncio.Semaphore | None = (
-                    asyncio.Semaphore(workers_count)
-                    if workers_count > 1
-                    else None
+                await self._upload_parts(
+                    uploader=uploader,
+                    chunks=reader.chunked(size=part_size),
+                    workers_count=workers_count,
                 )
-
-                async def upload_part(task: Coroutine, chunk: ChunkFuture):
-                    try:
-                        if semaphore is None:
-                            return await task
-                        async with semaphore:
-                            return await task
-                    finally:
-                        # Also close parts cancelled while waiting for a worker.
-                        task.close()
-                        chunk.close()
-
-                tasks = []
-                for chunk_future in reader.chunked(size=part_size):
-                    tasks.append(
-                        upload_part(
-                            task=uploader.put_part(
-                                data=chunk_future, content_sha256=""
-                            ),
-                            chunk=chunk_future,
-                        ),
-                    )
-
-                await self._wait_for_uploads(tasks)
 
     async def _download_range(
         self,
@@ -965,6 +953,7 @@ class MultipartUploader:
         async with self.__client.delete(
             object_name=self._object_name,
             params={"uploadId": self._upload_id},
+            raise_for_status=False,
         ) as resp:
             payload = await resp.read()
             # A repeated abort can return NoSuchUpload after a lost response.

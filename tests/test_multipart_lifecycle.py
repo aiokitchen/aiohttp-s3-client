@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 from types import SimpleNamespace
+from xml.etree import ElementTree as ET
 
 import pytest
 from aiohttp import ClientSession, TraceConfig, web
@@ -22,9 +23,16 @@ SHA256 = hashlib.sha256(DATA).hexdigest()
 
 
 @pytest.fixture
-async def multipart_backend():
+def raise_for_status():
+    return False
+
+
+@pytest.fixture
+async def multipart_backend(raise_for_status):
     state = SimpleNamespace(
         calls=[],
+        uploaded_parts={},
+        completed_parts=[],
         completion_bodies=[SUCCESS],
         completion_status=200,
         abort_statuses=[204],
@@ -37,7 +45,7 @@ async def multipart_backend():
     )
 
     async def handle(request):
-        await request.read()
+        payload = await request.read()
         if request.method == "POST" and "uploads" in request.query:
             state.calls.append("create")
             return web.Response(
@@ -47,11 +55,16 @@ async def multipart_backend():
         assert request.query["uploadId"] == "upload-id"
         if request.method == "PUT":
             state.calls.append("part")
+            state.uploaded_parts[int(request.query["partNumber"])] = payload
             return web.Response(
                 status=state.part_status, headers={"ETag": '"part-etag"'}
             )
         if request.method == "POST":
             state.calls.append("complete")
+            state.completed_parts = []
+            for part in ET.fromstring(payload).findall(".//{*}PartNumber"):
+                assert part.text is not None
+                state.completed_parts.append(int(part.text))
             state.completion_started.set()
             if state.pause_completion:
                 await state.release_completion.wait()
@@ -70,7 +83,7 @@ async def multipart_backend():
     app = web.Application()
     app.router.add_route("*", "/{key:.*}", handle)
     async with TestServer(app, host="127.0.0.1") as server:
-        async with ClientSession() as session:
+        async with ClientSession(raise_for_status=raise_for_status) as session:
             client = S3Client(
                 session=session,
                 url=server.make_url("/bucket"),
@@ -133,6 +146,7 @@ async def test_embedded_error_can_recover(multipart_backend):
     assert state.calls == ["create", "part", "complete", "complete"]
 
 
+@pytest.mark.parametrize("raise_for_status", [False, True])
 async def test_body_error_is_preserved_when_abort_fails(
     multipart_backend, caplog
 ):
@@ -147,13 +161,15 @@ async def test_body_error_is_preserved_when_abort_fails(
     assert "Failed to abort multipart upload" in caplog.text
 
 
-@pytest.mark.parametrize("statuses", [[204], [404], [503, 204]])
+@pytest.mark.parametrize("raise_for_status", [False, True])
+@pytest.mark.parametrize("statuses", [[204], [404], [503, 204], [503, 404]])
 async def test_explicit_abort_skips_completion(multipart_backend, statuses):
     client, state = multipart_backend
     state.abort_statuses = list(statuses)
     async with client.multipart_upload(object_name="key") as upload:
         await upload.abort()
     assert state.calls == ["create"] + ["abort"] * len(statuses)
+    assert upload._upload_id is None
 
 
 async def test_manual_completion_is_not_repeated(multipart_backend):
@@ -270,7 +286,7 @@ async def test_parallel_upload_completes(
     client, state = multipart_backend
     if from_file:
         path = tmp_path / "parts.bin"
-        path.write_bytes(b"x" * 12)
+        path.write_bytes(b"abcdefghijkl")
         await client.put_file_multipart(
             object_name="key",
             file_path=path,
@@ -280,11 +296,14 @@ async def test_parallel_upload_completes(
     else:
         await client.put_multipart(
             object_name="key",
-            data=[b"x" * 12],
+            data=[b"abcdefghijkl"],
             part_size=4,
             workers_count=2,
         )
     assert state.calls == ["create", "part", "part", "part", "complete"]
+
+    assert state.uploaded_parts == {1: b"abcd", 2: b"efgh", 3: b"ijkl"}
+    assert state.completed_parts == [1, 2, 3]
 
 
 @pytest.mark.parametrize("from_file", [False, True])
@@ -379,3 +398,21 @@ async def test_cancellation_preserves_request_cleanup(tmp_path, from_file):
                 await asyncio.gather(task, return_exceptions=True)
 
     assert events == ["cleanup_started", "cleanup_completed", "abort"]
+
+
+@pytest.mark.parametrize("raise_for_status", [False, True])
+@pytest.mark.parametrize("status", [403, 500])
+async def test_abort_failure_retries_and_keeps_upload_id(
+    multipart_backend, status
+):
+    client, state = multipart_backend
+    state.abort_statuses = [status]
+    upload = client.multipart_upload(object_name="key")
+    await upload.create()
+
+    with pytest.raises(AwsUploadError) as raised:
+        await upload.abort()
+
+    assert raised.value.status == status
+    assert state.calls == ["create", "abort", "abort", "abort"]
+    assert upload._upload_id == "upload-id"
