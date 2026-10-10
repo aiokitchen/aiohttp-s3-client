@@ -41,6 +41,18 @@ def create_complete_upload_request(parts: list[tuple[int, str]]) -> bytes:
     )
 
 
+def validate_complete_upload_response(payload: bytes) -> None:
+    try:
+        root = ET.fromstring(payload.lstrip())
+    except ET.ParseError as exc:
+        raise ValueError(
+            f"Invalid multipart completion XML: {payload!r}"
+        ) from exc
+
+    if root.tag.rsplit("}", 1)[-1] != "CompleteMultipartUploadResult":
+        raise ValueError(f"Multipart completion failed: {payload!r}")
+
+
 def parse_list_objects(
     payload: bytes,
 ) -> tuple[

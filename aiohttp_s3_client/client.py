@@ -16,7 +16,6 @@ from http import HTTPStatus
 from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Awaitable, Any
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
@@ -43,6 +42,7 @@ from aiohttp_s3_client.xml import (
     create_complete_upload_request,
     parse_create_multipart_upload_id,
     parse_list_objects,
+    validate_complete_upload_response,
 )
 
 log = logging.getLogger(__name__)
@@ -381,20 +381,39 @@ class S3Client:
                 asyncio.Semaphore(workers_count) if workers_count > 1 else None
             )
 
-            async def upload_part(task: Awaitable[Any]):
-                if semaphore is None:
-                    return await task
-                async with semaphore:
-                    return await task
+            async def upload_part(task: Coroutine, chunk: ChunkFuture):
+                try:
+                    if semaphore is None:
+                        return await task
+                    async with semaphore:
+                        return await task
+                finally:
+                    # Also close parts cancelled while waiting for a worker.
+                    task.close()
+                    chunk.close()
 
             tasks = []
             for chunk_future in reader.chunked(size=part_size):
                 tasks.append(
                     upload_part(
-                        uploader.put_part(chunk_future, ""),
+                        task=uploader.put_part(
+                            data=chunk_future, content_sha256=""
+                        ),
+                        chunk=chunk_future,
                     ),
                 )
+            await self._wait_for_uploads(tasks)
+
+    @staticmethod
+    async def _wait_for_uploads(uploads: Iterable[Coroutine]) -> None:
+        tasks = [asyncio.create_task(upload) for upload in uploads]
+        try:
             await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     @staticmethod
     async def _parts_generator(
@@ -468,21 +487,29 @@ class S3Client:
                     else None
                 )
 
-                async def upload_part(task: Awaitable[Any]):
-                    if semaphore is None:
-                        return await task
-                    async with semaphore:
-                        return await task
+                async def upload_part(task: Coroutine, chunk: ChunkFuture):
+                    try:
+                        if semaphore is None:
+                            return await task
+                        async with semaphore:
+                            return await task
+                    finally:
+                        # Also close parts cancelled while waiting for a worker.
+                        task.close()
+                        chunk.close()
 
                 tasks = []
                 for chunk_future in reader.chunked(size=part_size):
                     tasks.append(
                         upload_part(
-                            uploader.put_part(chunk_future, ""),
+                            task=uploader.put_part(
+                                data=chunk_future, content_sha256=""
+                            ),
+                            chunk=chunk_future,
                         ),
                     )
 
-                await asyncio.gather(*tasks)
+                await self._wait_for_uploads(tasks)
 
     async def _download_range(
         self,
@@ -909,19 +936,51 @@ class MultipartUploader:
             data=complete_upload_request,
             content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
         ) as resp:
+            payload = await resp.read()
             if resp.status != HTTPStatus.OK:
-                payload = await resp.text()
                 raise AwsUploadError(
                     resp,
                     (
                         f"Wrong status code {resp.status} from s3 "
-                        f"with message {payload}."
+                        f"with message {payload!r}."
                     ),
                 )
+
+            try:
+                validate_complete_upload_response(payload)
+            except ValueError as exc:
+                raise AwsUploadError(resp=resp, message=str(exc)) from exc
+
+        self._upload_id = None
 
     @cached_property
     def complete(self) -> Callable[..., Coroutine]:
         return self._retry_policy(self._complete)
+
+    async def _abort(self) -> None:
+        if self._upload_id is None:
+            raise RuntimeError("Multipart upload not created")
+
+        async with self.__client.delete(
+            object_name=self._object_name,
+            params={"uploadId": self._upload_id},
+        ) as resp:
+            payload = await resp.read()
+            # A repeated abort can return NoSuchUpload after a lost response.
+            if resp.status not in (HTTPStatus.NO_CONTENT, HTTPStatus.NOT_FOUND):
+                raise AwsUploadError(
+                    resp=resp,
+                    message=(
+                        f"Multipart abort failed ({resp.status}): {payload!r}"
+                    ),
+                )
+
+        self._upload_id = None
+
+    @cached_property
+    def abort(self) -> Callable[..., Coroutine]:
+        """Abort the active upload, retrying according to the upload policy."""
+        return self._retry_policy(self._abort)
 
     async def _part_uploader(
         self,
@@ -989,6 +1048,16 @@ class MultipartUploader:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        if exc_type is not None:
-            return
-        await self.complete()
+        try:
+            if exc_type is None and self._upload_id is not None:
+                await self.complete()
+        finally:
+            if self._upload_id is not None:
+                try:
+                    await self.abort()
+                except Exception:
+                    log.exception(
+                        "Failed to abort multipart upload %s for %s",
+                        self._upload_id,
+                        self._object_name,
+                    )

@@ -32,6 +32,9 @@ class ChunkFuture(Awaitable[Chunk]):
         self._result = result
         return result
 
+    def close(self) -> None:
+        self._coro.close()
+
     async def __aiter__(self) -> AsyncIterator[Chunk]:
         yield await self
 

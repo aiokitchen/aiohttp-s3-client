@@ -483,6 +483,19 @@ It returns an async context manager which handles upload creation and completion
 This method gives you more control over the upload process, for example you can
 specify part size, add custom metadata, or control concurrency.
 
+The multipart context manager reads and validates the completion XML, including
+errors returned with HTTP 200. If the body fails, the task is cancelled, or
+completion fails after retries, it attempts to abort the upload. Cleanup failures
+are logged without replacing the original error. You can also call
+`await uploader.abort()` explicitly; exiting the context then skips completion.
+
+When scheduling `put_part()` coroutines yourself, cancel and await outstanding
+uploads before leaving the context after a failure (for example, use a task
+group). The high-level upload methods do this automatically. Aborting is best
+effort: requests already processing on S3 may still finish, so bucket lifecycle
+cleanup remains useful. An ambiguous completion response can mean the object
+was already created; abort does not delete completed objects.
+
 #### Important multipart restrictions and recommendations:
 
 - **Minimum part size: 5 MiB** (`5 * 1024 * 1024` bytes). Every part must be at least
