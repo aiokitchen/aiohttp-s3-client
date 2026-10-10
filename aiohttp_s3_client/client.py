@@ -411,7 +411,8 @@ class S3Client:
             await asyncio.gather(*tasks)
         except BaseException:
             for task in tasks:
-                task.cancel()
+                if not task.done() and not task.cancelling():
+                    task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
 

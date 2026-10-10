@@ -3,7 +3,7 @@ import hashlib
 from types import SimpleNamespace
 
 import pytest
-from aiohttp import ClientSession, web
+from aiohttp import ClientSession, TraceConfig, web
 from aiohttp.test_utils import TestServer
 
 from aiohttp_s3_client import S3Client
@@ -285,3 +285,97 @@ async def test_parallel_upload_completes(
             workers_count=2,
         )
     assert state.calls == ["create", "part", "part", "part", "complete"]
+
+
+@pytest.mark.parametrize("from_file", [False, True])
+async def test_cancellation_preserves_request_cleanup(tmp_path, from_file):
+    requests_started = asyncio.Event()
+    release_requests = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    parts = set()
+    events = []
+
+    async def handle(request):
+        await request.read()
+
+        if request.method == "POST" and "uploads" in request.query:
+            return web.Response(
+                body=b"<InitiateMultipartUploadResult><UploadId>upload-id</UploadId></InitiateMultipartUploadResult>",
+            )
+
+        if request.method == "PUT":
+            parts.add(request.query["partNumber"])
+            if len(parts) == 2:
+                requests_started.set()
+
+            await release_requests.wait()
+            return web.Response(headers={"ETag": '"part-etag"'})
+
+        assert request.method == "DELETE"
+        events.append("abort")
+        return web.Response(status=204)
+
+    async def on_request_exception(session, context, params):
+        part_number = params.url.query.get("partNumber")
+        if part_number == "1":
+            task = asyncio.current_task()
+            assert task is not None
+            loop = asyncio.get_running_loop()
+            # Let gather wake the parent before releasing the other cleanup.
+            task.add_done_callback(
+                lambda _: loop.call_soon(release_cleanup.set)
+            )
+
+        elif part_number == "2":
+            events.append("cleanup_started")
+            await release_cleanup.wait()
+            events.append("cleanup_completed")
+
+    trace = TraceConfig()
+    trace.on_request_exception.append(on_request_exception)
+    app = web.Application()
+    app.router.add_route("*", "/{key:.*}", handle)
+
+    async with (
+        TestServer(app, host="127.0.0.1") as server,
+        ClientSession(trace_configs=[trace]) as session,
+    ):
+        client = S3Client(
+            session=session,
+            url=server.make_url("/bucket"),
+            access_key_id="test-key",
+            secret_access_key="test-secret",
+            region="us-east-1",
+        )
+        if from_file:
+            path = tmp_path / "parts.bin"
+            path.write_bytes(b"x" * 8)
+            operation = client.put_file_multipart(
+                object_name="key",
+                file_path=path,
+                part_size=4,
+                workers_count=2,
+            )
+        else:
+            operation = client.put_multipart(
+                object_name="key",
+                data=[b"x" * 8],
+                part_size=4,
+                workers_count=2,
+            )
+
+        task = asyncio.create_task(operation)
+        try:
+            await asyncio.wait_for(requests_started.wait(), timeout=2)
+            task.cancel()
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        finally:
+            release_cleanup.set()
+            release_requests.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    assert events == ["cleanup_started", "cleanup_completed", "abort"]
