@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import hashlib
 from types import SimpleNamespace
 from xml.etree import ElementTree as ET
@@ -625,3 +626,73 @@ async def test_fresh_cancellation_during_auto_abort_propagates(
 
     assert state.calls == ["create"]
     assert "Failed to abort multipart upload" not in caplog.text
+
+
+@pytest.mark.parametrize("from_file", [False, True])
+@pytest.mark.parametrize("child_failure", [False, True])
+async def test_cancelled_parallel_upload_retrieves_child_errors(
+    multipart_backend, monkeypatch, tmp_path, from_file, child_failure
+):
+    client, state = multipart_backend
+    started = asyncio.Event()
+    active = set()
+    stopped = set()
+    loop_errors = []
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+
+    async def part_uploader(self, part_no, data, content_sha256, **kwargs):
+        active.add(part_no)
+        if len(active) == 2:
+            started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            if child_failure and part_no == 1:
+                raise ValueError("part failed during cancellation") from None
+            raise
+        finally:
+            active.remove(part_no)
+            stopped.add(part_no)
+
+    def assert_stopped():
+        assert not active
+        assert stopped == {1, 2}
+
+    monkeypatch.setattr(MultipartUploader, "_part_uploader", part_uploader)
+    state.abort_guard = assert_stopped
+    if from_file:
+        path = tmp_path / "parts.bin"
+        path.write_bytes(b"x" * 8)
+        operation = client.put_file_multipart(
+            object_name="key", file_path=path, part_size=4, workers_count=2
+        )
+    else:
+        operation = client.put_multipart(
+            object_name="key", data=[b"x" * 8], part_size=4, workers_count=2
+        )
+
+    loop.set_exception_handler(
+        lambda loop, context: loop_errors.append(context)
+    )
+    try:
+        task = asyncio.create_task(operation)
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        del task, operation
+        # Flush done callbacks and cycles before checking for unhandled errors.
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+        assert_stopped()
+        assert state.calls == ["create", "abort"]
+        assert loop_errors == []
+    finally:
+        loop.set_exception_handler(previous_handler)

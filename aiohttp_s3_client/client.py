@@ -426,10 +426,16 @@ class S3Client:
         ]
         tasks = [asyncio.create_task(upload) for upload in uploads]
 
+        group = asyncio.gather(*tasks)
         try:
-            # Keep cancellation of children under our control.
-            await asyncio.shield(asyncio.gather(*tasks))
+            # wait() leaves cancellation of children under our control.
+            await asyncio.wait((group,))
+            group.result()
         except BaseException:
+            # Retrieve the group error even if cancellation interrupts cleanup.
+            group.add_done_callback(
+                lambda done: None if done.cancelled() else done.exception()
+            )
             for task in tasks:
                 if not task.done():
                     task.cancel()
