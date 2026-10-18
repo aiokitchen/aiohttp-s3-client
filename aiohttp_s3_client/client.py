@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import math
 import mimetypes
 import sys
 import threading
@@ -339,6 +340,8 @@ class S3Client:
         workers_count: int = 1,
         part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
         **kwargs,
     ) -> None:
         """
@@ -354,6 +357,8 @@ class S3Client:
         part_upload_tries: how many times trying to put part to s3 before fail
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
+        auto_abort: abort the upload on failure or cancellation
+        abort_timeout: total seconds for automatic abort, including retries
         """
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
@@ -374,6 +379,8 @@ class S3Client:
                 object_name,
                 headers=headers,
                 max_retries=part_upload_tries,
+                auto_abort=auto_abort,
+                abort_timeout=abort_timeout,
                 **kwargs,
             ) as uploader,
         ):
@@ -456,6 +463,8 @@ class S3Client:
         part_upload_tries: int = 3,
         part_size: int = PART_SIZE,
         calculate_content_sha256: bool = True,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
         **kwargs,
     ) -> None:
         """
@@ -470,6 +479,8 @@ class S3Client:
         part_upload_tries: how many times trying to put part to s3 before fail
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
+        auto_abort: abort the upload on failure or cancellation
+        abort_timeout: total seconds for automatic abort, including retries
         """
 
         headers = self._prepare_headers(headers, str(object_name))
@@ -492,6 +503,8 @@ class S3Client:
                     object_name,
                     headers=headers,
                     max_retries=part_upload_tries,
+                    auto_abort=auto_abort,
+                    abort_timeout=abort_timeout,
                     **kwargs,
                 ) as uploader,
             ):
@@ -845,13 +858,24 @@ class S3Client:
                     f"{resp.status}: {payload}",
                 )
 
-    def multipart_upload(self, object_name: str) -> "MultipartUploader":
+    def multipart_upload(
+        self,
+        object_name: str,
+        *,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
+    ) -> "MultipartUploader":
         """
         Get S3MultipartUploader for object_name
 
         object_name: key in s3
         """
-        return MultipartUploader(self, str(object_name))
+        return MultipartUploader(
+            self,
+            str(object_name),
+            auto_abort=auto_abort,
+            abort_timeout=abort_timeout,
+        )
 
 
 class MultipartUploader:
@@ -867,8 +891,15 @@ class MultipartUploader:
             OSError,
             asyncio.TimeoutError,
         ),
+        *,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
     ):
+        if not math.isfinite(abort_timeout) or abort_timeout <= 0:
+            raise ValueError("abort_timeout must be finite and > 0")
         self.__client = client
+        self._auto_abort = auto_abort
+        self._abort_timeout = abort_timeout
         self._object_name = str(object_name)
         self._headers = headers
         self._upload_id: str | None = None
@@ -1043,9 +1074,10 @@ class MultipartUploader:
             if exc_type is None and self._upload_id is not None:
                 await self.complete()
         finally:
-            if self._upload_id is not None:
+            if self._auto_abort and self._upload_id is not None:
                 try:
-                    await self.abort()
+                    async with asyncio.timeout(self._abort_timeout):
+                        await self.abort()
                 except Exception:
                     log.exception(
                         "Failed to abort multipart upload %s for %s",

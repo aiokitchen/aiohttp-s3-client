@@ -147,18 +147,21 @@ async def test_embedded_error_can_recover(multipart_backend):
 
 
 @pytest.mark.parametrize("raise_for_status", [False, True])
+@pytest.mark.parametrize("auto_abort", [False, True])
 async def test_body_error_is_preserved_when_abort_fails(
-    multipart_backend, caplog
+    multipart_backend, caplog, auto_abort
 ):
     client, state = multipart_backend
     state.abort_statuses = [503]
     original = ValueError("source read failed")
     with pytest.raises(ValueError) as raised:
-        async with client.multipart_upload(object_name="key"):
+        async with client.multipart_upload(
+            object_name="key", auto_abort=auto_abort
+        ):
             raise original
     assert raised.value is original
-    assert state.calls == ["create", "abort", "abort", "abort"]
-    assert "Failed to abort multipart upload" in caplog.text
+    assert state.calls == ["create"] + ["abort"] * (3 * auto_abort)
+    assert ("Failed to abort multipart upload" in caplog.text) == auto_abort
 
 
 @pytest.mark.parametrize("raise_for_status", [False, True])
@@ -166,7 +169,9 @@ async def test_body_error_is_preserved_when_abort_fails(
 async def test_explicit_abort_skips_completion(multipart_backend, statuses):
     client, state = multipart_backend
     state.abort_statuses = list(statuses)
-    async with client.multipart_upload(object_name="key") as upload:
+    async with client.multipart_upload(
+        object_name="key", auto_abort=False, abort_timeout=1e-9
+    ) as upload:
         await upload.abort()
     assert state.calls == ["create"] + ["abort"] * len(statuses)
     assert upload._upload_id is None
@@ -230,8 +235,9 @@ async def test_http_failure_aborts_only_created_upload(
 
 
 @pytest.mark.parametrize("from_file", [False, True])
+@pytest.mark.parametrize("auto_abort", [False, True])
 async def test_parallel_parts_stop_before_abort(
-    multipart_backend, monkeypatch, tmp_path, from_file
+    multipart_backend, monkeypatch, tmp_path, from_file, auto_abort
 ):
     client, state = multipart_backend
     active = set()
@@ -267,6 +273,7 @@ async def test_parallel_parts_stop_before_abort(
                 file_path=path,
                 part_size=4,
                 workers_count=2,
+                auto_abort=auto_abort,
             )
         else:
             await client.put_multipart(
@@ -274,9 +281,11 @@ async def test_parallel_parts_stop_before_abort(
                 data=[b"x" * 12],
                 part_size=4,
                 workers_count=2,
+                auto_abort=auto_abort,
             )
     assert raised.value is original
-    assert state.calls == ["create", "abort"]
+    assert_stopped()
+    assert state.calls == ["create"] + ["abort"] * auto_abort
 
 
 @pytest.mark.parametrize("from_file", [False, True])
@@ -493,3 +502,126 @@ async def test_failure_cancels_retry_with_stale_cancellation_count(
     assert attempts == 2
     assert events == ["retry_cancelled"]
     assert state.calls == ["create", "abort"]
+
+
+@pytest.mark.parametrize(
+    "timeout", [0, -1, float("inf"), -float("inf"), float("nan")]
+)
+async def test_abort_timeout_must_be_positive_and_finite(
+    multipart_backend, timeout
+):
+    client, state = multipart_backend
+    with pytest.raises(ValueError, match="abort_timeout"):
+        client.multipart_upload(object_name="key", abort_timeout=timeout)
+    assert state.calls == []
+
+
+@pytest.mark.parametrize("method", ["context", "file", "stream"])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_auto_abort_timeout_covers_retries_and_preserves_failure(
+    multipart_backend, monkeypatch, tmp_path, caplog, method, cancelled
+):
+    client, state = multipart_backend
+    original = ValueError("part failed")
+    entered = asyncio.Event()
+    budgets = []
+    attempts = 0
+    real_timeout = asyncio.timeout
+
+    def capture_timeout(delay):
+        budget = real_timeout(delay)
+        if delay == 7.5:
+            budgets.append(budget)
+        return budget
+
+    async def failing_part(*args, **kwargs):
+        entered.set()
+        if cancelled:
+            await asyncio.Future()
+        raise original
+
+    async def abort(self):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("retry abort")
+        # Expire the original deadline during the retry, without sleeping.
+        budgets[0].reschedule(asyncio.get_running_loop().time())
+        await asyncio.Future()
+
+    monkeypatch.setattr(asyncio, "timeout", capture_timeout)
+    monkeypatch.setattr(MultipartUploader, "_part_uploader", failing_part)
+    monkeypatch.setattr(MultipartUploader, "_abort", abort)
+
+    async def operation():
+        if method == "context":
+            async with client.multipart_upload(
+                object_name="key", abort_timeout=7.5
+            ) as upload:
+                await upload.put_part(data=DATA, content_sha256=SHA256)
+        elif method == "file":
+            path = tmp_path / "part.bin"
+            path.write_bytes(DATA)
+            await client.put_file_multipart(
+                object_name="key", file_path=path, abort_timeout=7.5
+            )
+        else:
+            await client.put_multipart(
+                object_name="key", data=[DATA], abort_timeout=7.5
+            )
+
+    task = asyncio.create_task(operation())
+    try:
+        if cancelled:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            task.cancel("upload cancelled")
+            with pytest.raises(asyncio.CancelledError) as raised_cancel:
+                await asyncio.wait_for(task, timeout=2)
+            assert raised_cancel.value.args == ("upload cancelled",)
+            assert task.cancelled()
+        else:
+            with pytest.raises(ValueError) as raised:
+                await asyncio.wait_for(task, timeout=2)
+            assert raised.value is original
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert attempts == 2
+    assert len(budgets) == 1
+    assert budgets[0].expired()
+    assert state.calls == ["create"]
+    assert "Failed to abort multipart upload" in caplog.text
+
+
+async def test_fresh_cancellation_during_auto_abort_propagates(
+    multipart_backend, monkeypatch, caplog
+):
+    client, state = multipart_backend
+    abort_started = asyncio.Event()
+
+    async def abort(self):
+        abort_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(MultipartUploader, "_abort", abort)
+
+    async def operation():
+        async with client.multipart_upload(object_name="key"):
+            raise ValueError("part failed")
+
+    task = asyncio.create_task(operation())
+    try:
+        await asyncio.wait_for(abort_started.wait(), timeout=2)
+        task.cancel("stop cleanup")
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await asyncio.wait_for(task, timeout=2)
+        assert raised.value.args == ("stop cleanup",)
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert state.calls == ["create"]
+    assert "Failed to abort multipart upload" not in caplog.text

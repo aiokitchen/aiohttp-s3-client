@@ -485,7 +485,9 @@ specify part size, add custom metadata, or control concurrency.
 
 The context manager validates the completion response, including errors returned
 with HTTP 200. On failure or cancellation, it attempts to abort the upload
-without masking the original error. Use `await uploader.abort()` to abort explicitly.
+without masking the original error. Disable this with `auto_abort=False`;
+`abort_timeout=10.0` sets its total timeout in seconds, including retries but not part cleanup.
+Use `await uploader.abort()` to abort explicitly.
 
 If you run `put_part()` calls concurrently, cancel and await them before leaving
 the context on failure. High-level upload methods handle this automatically.
