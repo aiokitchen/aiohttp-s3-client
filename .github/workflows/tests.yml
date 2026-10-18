@@ -43,11 +43,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       s3:
-        image: docker://adobe/s3mock
+        image: docker://adobe/s3mock:5.2.3
         ports:
           - 9090:9090
         env:
-          initialBuckets: test
+          COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: test
 
     strategy:
       fail-fast: false

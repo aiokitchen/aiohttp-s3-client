@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import math
 import mimetypes
 import sys
 import threading
@@ -16,7 +17,6 @@ from http import HTTPStatus
 from mmap import PAGESIZE
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Awaitable, Any
 from urllib.parse import quote
 
 from aiohttp import ClientSession, hdrs
@@ -43,6 +43,7 @@ from aiohttp_s3_client.xml import (
     create_complete_upload_request,
     parse_create_multipart_upload_id,
     parse_list_objects,
+    validate_complete_upload_response,
 )
 
 log = logging.getLogger(__name__)
@@ -339,6 +340,8 @@ class S3Client:
         workers_count: int = 1,
         part_upload_tries: int = 3,
         calculate_content_sha256: bool = True,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
         **kwargs,
     ) -> None:
         """
@@ -354,6 +357,8 @@ class S3Client:
         part_upload_tries: how many times trying to put part to s3 before fail
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
+        auto_abort: abort the upload on failure or cancellation
+        abort_timeout: total seconds for automatic abort, including retries
         """
         log.debug(
             "Going to multipart upload %s to %s with part size %d",
@@ -374,27 +379,68 @@ class S3Client:
                 object_name,
                 headers=headers,
                 max_retries=part_upload_tries,
+                auto_abort=auto_abort,
+                abort_timeout=abort_timeout,
                 **kwargs,
             ) as uploader,
         ):
-            semaphore: asyncio.Semaphore | None = (
-                asyncio.Semaphore(workers_count) if workers_count > 1 else None
+            await self._upload_parts(
+                uploader=uploader,
+                chunks=reader.chunked(size=part_size),
+                workers_count=workers_count,
             )
 
-            async def upload_part(task: Awaitable[Any]):
-                if semaphore is None:
-                    return await task
-                async with semaphore:
-                    return await task
+    @staticmethod
+    async def _upload_parts(
+        *,
+        uploader: "MultipartUploader",
+        chunks: Iterable[ChunkFuture],
+        workers_count: int,
+    ) -> None:
+        semaphore = (
+            asyncio.Semaphore(workers_count) if workers_count > 1 else None
+        )
 
-            tasks = []
-            for chunk_future in reader.chunked(size=part_size):
-                tasks.append(
-                    upload_part(
-                        uploader.put_part(chunk_future, ""),
-                    ),
-                )
-            await asyncio.gather(*tasks)
+        async def upload_part(
+            *,
+            upload: Coroutine[None, None, None],
+            chunk: ChunkFuture,
+        ) -> None:
+            try:
+                if semaphore is None:
+                    await upload
+                else:
+                    async with semaphore:
+                        await upload
+            finally:
+                # Also close parts cancelled while waiting for a worker.
+                upload.close()
+                chunk.close()
+
+        uploads: list[Coroutine[None, None, None]] = [
+            upload_part(
+                upload=uploader.put_part(data=chunk, content_sha256=""),
+                chunk=chunk,
+            )
+            for chunk in chunks
+        ]
+        tasks = [asyncio.create_task(upload) for upload in uploads]
+
+        group = asyncio.gather(*tasks)
+        try:
+            # wait() leaves cancellation of children under our control.
+            await asyncio.wait((group,))
+            group.result()
+        except BaseException:
+            # Retrieve the group error even if cancellation interrupts cleanup.
+            group.add_done_callback(
+                lambda done: None if done.cancelled() else done.exception()
+            )
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     @staticmethod
     async def _parts_generator(
@@ -423,6 +469,8 @@ class S3Client:
         part_upload_tries: int = 3,
         part_size: int = PART_SIZE,
         calculate_content_sha256: bool = True,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
         **kwargs,
     ) -> None:
         """
@@ -437,6 +485,8 @@ class S3Client:
         part_upload_tries: how many times trying to put part to s3 before fail
         calculate_content_sha256: whether to calculate sha256 hash of a part
             for integrity purposes
+        auto_abort: abort the upload on failure or cancellation
+        abort_timeout: total seconds for automatic abort, including retries
         """
 
         headers = self._prepare_headers(headers, str(object_name))
@@ -459,30 +509,16 @@ class S3Client:
                     object_name,
                     headers=headers,
                     max_retries=part_upload_tries,
+                    auto_abort=auto_abort,
+                    abort_timeout=abort_timeout,
                     **kwargs,
                 ) as uploader,
             ):
-                semaphore: asyncio.Semaphore | None = (
-                    asyncio.Semaphore(workers_count)
-                    if workers_count > 1
-                    else None
+                await self._upload_parts(
+                    uploader=uploader,
+                    chunks=reader.chunked(size=part_size),
+                    workers_count=workers_count,
                 )
-
-                async def upload_part(task: Awaitable[Any]):
-                    if semaphore is None:
-                        return await task
-                    async with semaphore:
-                        return await task
-
-                tasks = []
-                for chunk_future in reader.chunked(size=part_size):
-                    tasks.append(
-                        upload_part(
-                            uploader.put_part(chunk_future, ""),
-                        ),
-                    )
-
-                await asyncio.gather(*tasks)
 
     async def _download_range(
         self,
@@ -828,13 +864,24 @@ class S3Client:
                     f"{resp.status}: {payload}",
                 )
 
-    def multipart_upload(self, object_name: str) -> "MultipartUploader":
+    def multipart_upload(
+        self,
+        object_name: str,
+        *,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
+    ) -> "MultipartUploader":
         """
         Get S3MultipartUploader for object_name
 
         object_name: key in s3
         """
-        return MultipartUploader(self, str(object_name))
+        return MultipartUploader(
+            self,
+            str(object_name),
+            auto_abort=auto_abort,
+            abort_timeout=abort_timeout,
+        )
 
 
 class MultipartUploader:
@@ -850,8 +897,15 @@ class MultipartUploader:
             OSError,
             asyncio.TimeoutError,
         ),
+        *,
+        auto_abort: bool = True,
+        abort_timeout: float = 10.0,
     ):
+        if not math.isfinite(abort_timeout) or abort_timeout <= 0:
+            raise ValueError("abort_timeout must be finite and > 0")
         self.__client = client
+        self._auto_abort = auto_abort
+        self._abort_timeout = abort_timeout
         self._object_name = str(object_name)
         self._headers = headers
         self._upload_id: str | None = None
@@ -909,19 +963,52 @@ class MultipartUploader:
             data=complete_upload_request,
             content_sha256=hashlib.sha256(complete_upload_request).hexdigest(),
         ) as resp:
+            payload = await resp.read()
             if resp.status != HTTPStatus.OK:
-                payload = await resp.text()
                 raise AwsUploadError(
                     resp,
                     (
                         f"Wrong status code {resp.status} from s3 "
-                        f"with message {payload}."
+                        f"with message {payload!r}."
                     ),
                 )
+
+            try:
+                validate_complete_upload_response(payload)
+            except ValueError as exc:
+                raise AwsUploadError(resp=resp, message=str(exc)) from exc
+
+        self._upload_id = None
 
     @cached_property
     def complete(self) -> Callable[..., Coroutine]:
         return self._retry_policy(self._complete)
+
+    async def _abort(self) -> None:
+        if self._upload_id is None:
+            raise RuntimeError("Multipart upload not created")
+
+        async with self.__client.delete(
+            object_name=self._object_name,
+            params={"uploadId": self._upload_id},
+            raise_for_status=False,
+        ) as resp:
+            payload = await resp.read()
+            # A repeated abort can return NoSuchUpload after a lost response.
+            if resp.status not in (HTTPStatus.NO_CONTENT, HTTPStatus.NOT_FOUND):
+                raise AwsUploadError(
+                    resp=resp,
+                    message=(
+                        f"Multipart abort failed ({resp.status}): {payload!r}"
+                    ),
+                )
+
+        self._upload_id = None
+
+    @cached_property
+    def abort(self) -> Callable[..., Coroutine]:
+        """Abort the active upload, retrying according to the upload policy."""
+        return self._retry_policy(self._abort)
 
     async def _part_uploader(
         self,
@@ -989,6 +1076,17 @@ class MultipartUploader:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        if exc_type is not None:
-            return
-        await self.complete()
+        try:
+            if exc_type is None and self._upload_id is not None:
+                await self.complete()
+        finally:
+            if self._auto_abort and self._upload_id is not None:
+                try:
+                    async with asyncio.timeout(self._abort_timeout):
+                        await self.abort()
+                except Exception:
+                    log.exception(
+                        "Failed to abort multipart upload %s for %s",
+                        self._upload_id,
+                        self._object_name,
+                    )
