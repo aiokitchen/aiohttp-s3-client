@@ -4,9 +4,6 @@ from typing import NamedTuple
 from xml.etree import ElementTree as ET
 
 
-NS = "http://s3.amazonaws.com/doc/2006-03-01/"
-
-
 class AwsObjectMeta(NamedTuple):
     etag: str
     key: str
@@ -16,18 +13,14 @@ class AwsObjectMeta(NamedTuple):
 
 
 def parse_create_multipart_upload_id(payload: bytes) -> str:
-    root = ET.fromstring(payload)
-    uploadid_el = root.find(f"{{{NS}}}UploadId")
-    if uploadid_el is None:
-        uploadid_el = root.find("UploadId")
-    if uploadid_el is None or uploadid_el.text is None:
+    upload_id = ET.fromstring(payload).findtext("{*}UploadId")
+    if not upload_id:
         raise ValueError(f"Upload id not found in {payload!r}")
-    return uploadid_el.text
+    return upload_id
 
 
 def create_complete_upload_request(parts: list[tuple[int, str]]) -> bytes:
-    ET.register_namespace("", NS)
-    root = ET.Element(f"{{{NS}}}CompleteMultipartUpload")
+    root = ET.Element("CompleteMultipartUpload")
 
     for part_no, etag in parts:
         part_el = ET.SubElement(root, "Part")
@@ -36,9 +29,7 @@ def create_complete_upload_request(parts: list[tuple[int, str]]) -> bytes:
         part_number_el = ET.SubElement(part_el, "PartNumber")
         part_number_el.text = str(part_no)
 
-    return b'<?xml version="1.0" encoding="UTF-8"?>' + ET.tostring(
-        root, encoding="UTF-8"
-    )
+    return ET.tostring(root, encoding="UTF-8", xml_declaration=True)
 
 
 def validate_complete_upload_response(payload: bytes) -> None:
@@ -64,10 +55,10 @@ def parse_list_objects(
     result = []
     prefixes = [
         el.text
-        for el in root.findall(f"{{{NS}}}CommonPrefixes/{{{NS}}}Prefix")
+        for el in root.iterfind("{*}CommonPrefixes/{*}Prefix")
         if el.text
     ]
-    for el in root.findall(f"{{{NS}}}Contents"):
+    for el in root.iterfind("{*}Contents"):
         etag = key = last_modified = size = storage_class = None
         for child in el:
             tag = child.tag[child.tag.rfind("}") + 1 :]
@@ -96,6 +87,5 @@ def parse_list_objects(
         ):
             meta = AwsObjectMeta(etag, key, last_modified, size, storage_class)
             result.append(meta)
-    nct_el = root.find(f"{{{NS}}}NextContinuationToken")
-    continuation_token = nct_el.text if nct_el is not None else None
+    continuation_token = root.findtext("{*}NextContinuationToken")
     return result, prefixes, continuation_token
